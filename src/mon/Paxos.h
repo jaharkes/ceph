@@ -31,9 +31,80 @@ b 12v
 c 14v
 d
 e 12v
-
-
 */
+
+/**
+ * Paxos storage layout and behavior
+ *
+ * Currently, we use a key/value store to hold all the Paxos-related data, but
+ * it can logically be depicted as this:
+ *
+ *  paxos:
+ *    first_committed -> 1
+ *     last_committed -> 4
+ *		    1 -> value_1
+ *		    2 -> value_2
+ *		    3 -> value_3
+ *		    4 -> value_4
+ *
+ * Since we are relying on a k/v store supporting atomic transactions, we can
+ * guarantee that if 'last_committed' has a value of '4', then we have up to
+ * version 4 on the store, and no more than that; the same applies to
+ * 'first_committed', which holding '1' will strictly meaning that our lowest
+ * version is 1.
+ *
+ * Each version's value (value_1, value_2, ..., value_n) is a blob of data,
+ * incomprehensible to the Paxos. These values are proposed to the Paxos on
+ * propose_new_value() and each one is a transaction encoded in a bufferlist.
+ *
+ * The Paxos will write the value to disk, associating it with its version,
+ * but will take a step further: the value shall be decoded, and the operations
+ * on that transaction shall be applied during the same transaction that will
+ * write the value's encoded bufferlist to disk. This behavior ensures that
+ * whatever is being proposed will only be available on the store when it is
+ * applied by Paxos, which will then be aware of such new values, guaranteeing
+ * the store state is always consistent without requiring shady workarounds.
+ *
+ * So, let's say that FooMonitor proposes the following transaction, neatly
+ * encoded on a bufferlist of course:
+ *
+ *  Tx_Foo
+ *    put(foo, last_committed, 3)
+ *    put(foo, 3, foo_value_3)
+ *    erase(foo, 2)
+ *    erase(foo, 1)
+ *    put(foo, first_committed, 3)
+ *
+ * And knowing that the Paxos is proposed Tx_Foo as a bufferlist, once it is
+ * ready to commit, and assuming we are now committing version 5 of the Paxos,
+ * we will do something along the lines of:
+ *
+ *  Tx proposed_tx;
+ *  proposed_tx.decode(Tx_foo_bufferlist);
+ *
+ *  Tx our_tx;
+ *  our_tx.put(paxos, last_committed, 5);
+ *  our_tx.put(paxos, 5, Tx_foo_bufferlist);
+ *  our_tx.append(proposed_tx);
+ *
+ *  store_apply(our_tx);
+ *
+ * And the store should look like this after we apply 'our_tx':
+ *
+ *  paxos:
+ *    first_committed -> 1
+ *     last_committed -> 5
+ *		    1 -> value_1
+ *		    2 -> value_2
+ *		    3 -> value_3
+ *		    4 -> value_4
+ *		    5 -> Tx_foo_bufferlist
+ *  foo:
+ *    first_committed -> 3
+ *     last_committed -> 3
+ *		    3 -> foo_value_3
+ *
+ */
 
 #ifndef CEPH_MON_PAXOS_H
 #define CEPH_MON_PAXOS_H
@@ -48,6 +119,8 @@ e 12v
 
 #include "common/Timer.h"
 #include <errno.h>
+
+#include "MonitorDBStore.h"
 
 class Monitor;
 class MMonPaxos;
@@ -76,8 +149,7 @@ class Paxos {
   Monitor *mon;
 
   // my state machine info
-  int machine_id;
-  const char *machine_name;
+  const string paxos_name;
 
   friend class Monitor;
   friend class PaxosService;
@@ -846,10 +918,9 @@ public:
    * @param m A monitor
    * @param mid A machine id
    */
-  Paxos(Monitor *m,
-	int mid) : mon(m),
-		   machine_id(mid), 
-		   machine_name(get_paxos_name(mid)),
+  Paxos(Monitor *m, const string name) 
+		 : mon(m),
+		   paxos_name(name),
 		   state(STATE_RECOVERING),
 		   first_committed(0),
 		   last_pn(0),
@@ -867,8 +938,8 @@ public:
 		   accept_timeout_event(0),
 		   clock_drift_warned(0) { }
 
-  const char *get_machine_name() const {
-    return machine_name;
+  const string get_name() const {
+    return paxos_name;
   }
 
   void dispatch(PaxosServiceMessage *m);
@@ -920,11 +991,38 @@ public:
   void share_state(MMonPaxos *m, version_t peer_first_committed,
 		   version_t peer_last_committed);
   /**
-   * Store the state held on the message m into local, stable storage.
+   * Store on disk a state that was shared with us
+   *
+   * Basically, we received a set of version. Or just one. It doesn't matter.
+   * What matters is that we have to stash it in the store. So, we will simply
+   * write every single bufferlist into their own versions on our side (i.e.,
+   * onto paxos-related keys), and then we will decode those same bufferlists
+   * we just wrote and apply the transactions they hold. We will also update
+   * our first and last committed values to point to the new values, if need
+   * be. All all this is done tightly wrapped in a transaction to ensure we
+   * enjoy the atomicity guarantees given by our awesome k/v store.
    *
    * @param m A message
    */
   void store_state(MMonPaxos *m);
+  /**
+   * Helper function to decode a bufferlist into a transaction and append it
+   * to another transaction.
+   *
+   * This function is used during the Leader's commit and during the
+   * Paxos::store_state in order to apply the bufferlist's transaction onto
+   * the store.
+   *
+   * @param t The transaction to which we will append the operations
+   * @param bl A bufferlist containing an encoded transaction
+   */
+  void decode_append_transaction(MonitorDBStore::Transaction& t,
+				 bufferlist& bl) {
+    MonitorDBStore::Transaction vt;
+    bufferlist::iterator it = bl.begin();
+    vt.decode(it);
+    t.append(vt);
+  }
 
   /**
    * @todo This appears to be used only by the OSDMonitor, and I would say
@@ -952,7 +1050,16 @@ public:
    * @param force If specified, we may even erase the latest stashed version
    *		  iif @p first is higher than that version.
    */
-  void trim_to(version_t first, bool force=false);
+  void trim_to(version_t first, bool force = false);
+  /**
+   * Erase old states from stable storage.
+   *
+   * @param t A transaction
+   * @param first The version we are trimming to
+   * @param force If specified, we may even erase the latest stashed version
+   *		  iif @p first is higher than that version.
+   */
+  void trim_to(MonitorDBStore::Transaction *t, version_t first, bool force=false);
  
   /**
    * @defgroup Paxos_h_slurping_funcs Slurping-related functions
@@ -1098,17 +1205,6 @@ public:
    * @{
    */
   /**
-   * Get the latest version onto stable storage.
-   *
-   * Keeping the latest version on a predefined location makes it easier to
-   * access, since we know we always have the latest version on the same
-   * place.
-   *
-   * @param v the latest version
-   * @param bl the latest version's value
-   */
-  void stash_latest(version_t v, bufferlist& bl);
-  /**
    * Get the latest stashed version's value
    *
    * @param[out] bl the latest stashed version's value
@@ -1128,8 +1224,9 @@ public:
   /**
    * @}
    */
+ protected:
+  MonitorDBStore *get_store();
 };
-
 
 #endif
 

@@ -12,9 +12,10 @@
  * 
  */
 
+#include <sstream>
 #include "Paxos.h"
 #include "Monitor.h"
-#include "MonitorStore.h"
+#include "MonitorDBStore.h"
 
 #include "messages/MMonPaxos.h"
 
@@ -23,30 +24,36 @@
 
 #define dout_subsys ceph_subsys_paxos
 #undef dout_prefix
-#define dout_prefix _prefix(_dout, mon, mon->name, mon->rank, machine_name, state, first_committed, last_committed)
+#define dout_prefix _prefix(_dout, mon, mon->name, mon->rank, paxos_name, state, first_committed, last_committed)
 static ostream& _prefix(std::ostream *_dout, Monitor *mon, const string& name,
-		        int rank, const char *machine_name, int state,
+		        int rank, const string& paxos_name, int state,
 			version_t first_committed, version_t last_committed)
 {
   return *_dout << "mon." << name << "@" << rank
 		<< "(" << mon->get_state_name() << ")"
-		<< ".paxos(" << machine_name << " " << Paxos::get_statename(state)
+		<< ".paxos(" << paxos_name << " " << Paxos::get_statename(state)
 		<< " c " << first_committed << ".." << last_committed
 		<< ") ";
 }
 
-
+MonitorDBStore *Paxos::get_store()
+{
+  return mon->store;
+}
 
 void Paxos::init()
 {
   // load paxos variables from stable storage
-  last_pn = mon->store->get_int(machine_name, "last_pn");
-  accepted_pn = mon->store->get_int(machine_name, "accepted_pn");
-  last_committed = mon->store->get_int(machine_name, "last_committed");
-  first_committed = mon->store->get_int(machine_name, "first_committed");
-  bufferlist temp;
-  latest_stashed = get_stashed(temp);
-  slurping = mon->store->get_int(machine_name, "slurping");
+  last_pn = get_store()->get(get_name(), "last_pn");
+  accepted_pn = get_store()->get(get_name(), "accepted_pn");
+  last_committed = get_store()->get(get_name(), "last_committed");
+  first_committed = get_store()->get(get_name(), "first_committed");
+
+  dout(10) << __func__ << " last_pn: " << last_pn << " accepted_pn: "
+	   << accepted_pn << " last_committed: " << last_committed
+	   << " first_committed: " << first_committed << dendl;
+
+  //slurping = get_store()->get(get_name(), "slurping");
 
   dout(10) << "init" << dendl;
 }
@@ -70,10 +77,10 @@ void Paxos::collect(version_t oldpn)
   peer_last_committed.clear();
 
   // look for uncommitted value
-  if (mon->store->exists_bl_sn(machine_name, last_committed+1)) {
+  if (get_store()->exists(get_name(), last_committed+1)) {
     uncommitted_v = last_committed+1;
     uncommitted_pn = accepted_pn;
-    mon->store->get_bl_sn_safe(uncommitted_value, machine_name, last_committed+1);
+    get_store()->get(get_name(), last_committed+1, uncommitted_value);
     assert(uncommitted_value.length());
     dout(10) << "learned uncommitted " << (last_committed+1)
 	     << " (" << uncommitted_value.length() << " bytes) from myself" 
@@ -129,7 +136,10 @@ void Paxos::handle_collect(MMonPaxos *collect)
     accepted_pn_from = collect->pn_from;
     dout(10) << "accepting pn " << accepted_pn << " from " 
 	     << accepted_pn_from << dendl;
-    mon->store->put_int(accepted_pn, machine_name, "accepted_pn");
+  
+    MonitorDBStore::Transaction t;
+    t.put(get_name(), "accepted_pn", accepted_pn);
+    get_store()->apply_transaction(t);
   } else {
     // don't accept!
     dout(10) << "NOT accepting pn " << collect->pn << " from " << collect->pn_from
@@ -146,8 +156,8 @@ void Paxos::handle_collect(MMonPaxos *collect)
   // do we have an accepted but uncommitted value?
   //  (it'll be at last_committed+1)
   bufferlist bl;
-  if (mon->store->exists_bl_sn(machine_name, last_committed+1)) {
-    mon->store->get_bl_sn_safe(bl, machine_name, last_committed+1);
+  if (get_store()->exists(get_name(), last_committed+1)) {
+    get_store()->get(get_name(), last_committed+1, bl);
     assert(bl.length() > 0);
     dout(10) << " sharing our accepted but uncommitted value for " 
 	     << last_committed+1 << " (" << bl.length() << " bytes)" << dendl;
@@ -160,6 +170,18 @@ void Paxos::handle_collect(MMonPaxos *collect)
   collect->put();
 }
 
+/**
+ * @note This is Okay. We share our versions between peer_last_committed and
+ *	 our last_committed (inclusive), and add their bufferlists to the
+ *	 message. It will be the peer's job to apply them to his store, as
+ *	 these bufferlists will contain raw transactions.
+ *	 This function is called by both the Peon and the Leader. The Peon will
+ *	 share the state with the Leader during handle_collect(), sharing any
+ *	 values the leader may be missing (i.e., the leader's last_committed is
+ *	 lower than the peon's last_committed). The Leader will share the state
+ *	 with the Peon during handle_last(), if the peon's last_committed is
+ *	 lower than the leader's last_committed.
+ */
 void Paxos::share_state(MMonPaxos *m, version_t peer_first_committed,
 			version_t peer_last_committed)
 {
@@ -169,53 +191,35 @@ void Paxos::share_state(MMonPaxos *m, version_t peer_first_committed,
 	   << " lc " << peer_last_committed << dendl;
   version_t v = peer_last_committed + 1;
 
-  // start with a stashed full copy?
-  if (peer_last_committed + 1 < first_committed) {
-    bufferlist bl;
-    version_t l = get_stashed(bl);
-    assert(l <= last_committed);
-    dout(10) << "share_state starting with latest " << l 
-	     << " (" << bl.length() << " bytes)" << dendl;
-    m->latest_value.claim(bl);
-    m->latest_version = l;
-    v = l;
-  }
-
   // include incrementals
   for ( ; v <= last_committed; v++) {
-    if (mon->store->exists_bl_sn(machine_name, v)) {
-      mon->store->get_bl_sn_safe(m->values[v], machine_name, v);
+    if (get_store()->exists(get_name(), v)) {
+      get_store()->get(get_name(), v, m->values[v]);
       assert(m->values[v].length());
-      dout(10) << " sharing " << v << " (" 
+      dout(10) << " sharing " << v << " ("
 	       << m->values[v].length() << " bytes)" << dendl;
-   }
+    }
   }
 
   m->last_committed = last_committed;
 }
 
+/**
+ * Store on disk a state that was shared with us
+ *
+ * Basically, we received a set of version. Or just one. It doesn't matter.
+ * What matters is that we have to stash it in the store. So, we will simply
+ * write every single bufferlist into their own versions on our side (i.e.,
+ * onto paxos-related keys), and then we will decode those same bufferlists
+ * we just wrote and apply the transactions they hold. We will also update
+ * our first and last committed values to point to the new values, if need
+ * be. All all this is done tightly wrapped in a transaction to ensure we
+ * enjoy the atomicity guarantees given by our awesome k/v store.
+ */
 void Paxos::store_state(MMonPaxos *m)
 {
+  MonitorDBStore::Transaction t;
   map<version_t,bufferlist>::iterator start = m->values.begin();
-
-  // stash?
-  if (m->latest_version && m->latest_version > last_committed) {
-    dout(10) << "store_state got stash version " 
-	     << m->latest_version << ", zapping old states" << dendl;
-
-    assert(start != m->values.end() && start->first == m->latest_version);
-
-    // wipe out everything we had previously
-    trim_to(last_committed + 1);
-
-    stash_latest(m->latest_version, m->latest_value);
-
-    first_committed = m->latest_version;
-    last_committed = m->latest_version;
-    mon->store->put_bl_sn(start->second, machine_name, m->latest_version);
-    mon->store->put_int(first_committed, machine_name, "first_committed");
-    mon->store->put_int(last_committed, machine_name, "last_committed");
-  }
 
   // build map of values to store
   // we want to write the range [last_committed, m->last_committed] only.
@@ -227,10 +231,14 @@ void Paxos::store_state(MMonPaxos *m)
     start = m->values.end();
   }
 
+  // push forward the start position on the message's values iterator, up until
+  // we run out of positions or we find a position matching 'last_committed'.
   while (start != m->values.end() && start->first <= last_committed) {
     ++start;
   }
 
+  // make sure we get the right interval of values to apply by pushing forward
+  // the 'end' iterator until it matches the message's 'last_committed'.
   map<version_t,bufferlist>::iterator end = start;
   while (end != m->values.end() && end->first <= m->last_committed) {
     last_committed = end->first;
@@ -244,13 +252,22 @@ void Paxos::store_state(MMonPaxos *m)
   } else {
     dout(10) << "store_state [" << start->first << ".." 
 	     << last_committed << "]" << dendl;
-
-    mon->store->put_bl_sn_map(machine_name, start, end);
-    mon->store->put_int(last_committed, machine_name, "last_committed");
-    mon->store->put_int(first_committed, machine_name, "first_committed");
+    // we should apply the state here -- decode every single bufferlist in the
+    // map and append the transactions to 't'.
+    map<version_t,bufferlist>::iterator it;
+    for (it = start; it != end; ++it) {
+      // write the bufferlist as the version's value
+      t.put(get_name(), it->first, it->second);
+      // decode the bufferlist and append it to the transaction we will shortly
+      // apply.
+      decode_append_transaction(t, it->second);
+    }
+    t.put(get_name(), "last_committed", last_committed);
+    t.put(get_name(), "first_committed", first_committed);
   }
+  if (!t.empty())
+    get_store()->apply_transaction(t);
 }
-
 
 // leader
 void Paxos::handle_last(MMonPaxos *last)
@@ -267,7 +284,7 @@ void Paxos::handle_last(MMonPaxos *last)
   // push it to them.
   peer_last_committed[last->get_source().num()] = last->last_committed;
 
-  // did we receive a committed value?
+  // store any committed values if any are specified in the message
   store_state(last);
       
   // do they accept your pn?
@@ -378,7 +395,11 @@ void Paxos::begin(bufferlist& v)
   accepted.clear();
   accepted.insert(mon->rank);
   new_value = v;
-  mon->store->put_bl_sn(new_value, machine_name, last_committed+1);
+  // store the proposed value in the store. IF it is accepted, we will then
+  // have to decode it into a transaction and apply it.
+  MonitorDBStore::Transaction t;
+  t.put(get_name(), last_committed+1, new_value);
+  get_store()->apply_transaction(t);
 
   if (mon->get_quorum().size() == 1) {
     // we're alone, take it easy
@@ -435,7 +456,11 @@ void Paxos::handle_begin(MMonPaxos *begin)
   // yes.
   version_t v = last_committed+1;
   dout(10) << "accepting value for " << v << " pn " << accepted_pn << dendl;
-  mon->store->put_bl_sn(begin->values[v], machine_name, v);
+  // store the accepted value onto our store. We will have to decode it and
+  // apply its transaction once we receive permission to commit.
+  MonitorDBStore::Transaction t;
+  t.put(get_name(), v, begin->values[v]);
+  get_store()->apply_transaction(t);
 
   // reply
   MMonPaxos *accept = new MMonPaxos(mon->get_epoch(), MMonPaxos::OP_ACCEPT,
@@ -519,14 +544,22 @@ void Paxos::commit()
   //   leader still got a majority and committed with out us.)
   lease_expire = utime_t();  // cancel lease
 
+  MonitorDBStore::Transaction t;
+
   // commit locally
   last_committed++;
   last_commit_time = ceph_clock_now(g_ceph_context);
-  mon->store->put_int(last_committed, machine_name, "last_committed");
+  t.put(get_name(), "last_committed", last_committed);
   if (!first_committed) {
     first_committed = last_committed;
-    mon->store->put_int(last_committed, machine_name, "first_committed");
+    t.put(get_name(), "first_committed", last_committed);
   }
+
+  // decode the value and apply its transaction to the store.
+  // this value can now be read from last_committed.
+  decode_append_transaction(t, new_value);
+
+  get_store()->apply_transaction(t);
 
   // tell everyone
   for (set<int>::const_iterator p = mon->get_quorum().begin();
@@ -747,7 +780,7 @@ void Paxos::lease_renew_timeout()
  * trim old states
  */
 
-void Paxos::trim_to(version_t first, bool force)
+void Paxos::trim_to(MonitorDBStore::Transaction *t, version_t first, bool force)
 {
   dout(10) << "trim_to " << first << " (was " << first_committed << ")"
 	   << ", latest_stashed " << latest_stashed
@@ -759,14 +792,20 @@ void Paxos::trim_to(version_t first, bool force)
   while (first_committed < first &&
 	 (force || first_committed < latest_stashed)) {
     dout(10) << "trim " << first_committed << dendl;
-    mon->store->erase_sn(machine_name, first_committed);
-    for (list<string>::iterator p = extra_state_dirs.begin();
-	 p != extra_state_dirs.end();
-	 ++p)
-      mon->store->erase_sn(p->c_str(), first_committed);
+    t->erase(get_name(), first_committed);
     first_committed++;
   }
-  mon->store->put_int(first_committed, machine_name, "first_committed");
+  t->put(get_name(), "first_committed", first_committed);
+}
+
+void Paxos::trim_to(version_t first, bool force)
+{
+  MonitorDBStore::Transaction t;
+  
+  trim_to(&t, first, force);
+
+  if (!t.empty())
+    get_store()->apply_transaction(t);
 }
 
 /*
@@ -784,7 +823,9 @@ version_t Paxos::get_new_proposal_number(version_t gt)
   last_pn += (version_t)mon->rank;
   
   // write
-  mon->store->put_int(last_pn, machine_name, "last_pn");
+  MonitorDBStore::Transaction t;
+  t.put(get_name(), "last_pn", last_pn);
+  get_store()->apply_transaction(t);
 
   dout(10) << "get_new_proposal_number = " << last_pn << dendl;
   return last_pn;
@@ -940,7 +981,7 @@ bool Paxos::is_readable(version_t v)
 
 bool Paxos::read(version_t v, bufferlist &bl)
 {
-  if (mon->store->get_bl_sn(bl, machine_name, v) <= 0)
+  if (!get_store()->get(get_name(), v, bl))
     return false;
   return true;
 }
@@ -995,7 +1036,9 @@ bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
   return true;
 }
 
-void Paxos::stash_latest(version_t v, bufferlist& bl)
+#if 0
+void Paxos::stash_latest(MonitorDBStore::Transaction *t, 
+			 version_t v, bufferlist& bl)
 {
   if (v == latest_stashed) {
     dout(10) << "stash_latest v" << v << " already stashed" << dendl;
@@ -1007,16 +1050,24 @@ void Paxos::stash_latest(version_t v, bufferlist& bl)
   ::encode(bl, final);
   
   dout(10) << "stash_latest v" << v << " len " << bl.length() << dendl;
-  mon->store->put_bl_ss(final, machine_name, "latest");
+  t->put(get_name(), "latest", final);
 
   latest_stashed = v;
 }
 
+void Paxos::stash_latest(version_t v, bufferlist& bl)
+{
+  MonitorDBStore::Transaction t;
+  stash_latest(&t, v, bl);
+  if (!t.empty())
+    get_store()->apply_transaction(t);
+}
+#endif
+
 version_t Paxos::get_stashed(bufferlist& bl)
 {
   bufferlist full;
-  mon->store->get_bl_ss_safe(full, machine_name, "latest");
-  if (!full.length()) {
+  if (get_store()->get(get_name(), "latest", full)) {
     dout(10) << "get_stashed not found" << dendl;
     return 0;
   }
@@ -1043,6 +1094,10 @@ bool Paxos::is_consistent()
   if (slurping != 0)
     consistent = false;
 
+  if (!(consistent || (slurping == 1))) {
+    dout(5) << "consistent: " << consistent 
+	    << " slurping: " << slurping << dendl;
+  }
   assert(consistent || (slurping == 1));
   return consistent;
 }
@@ -1051,7 +1106,7 @@ void Paxos::start_slurping()
 {
   if (slurping != 1) {
     slurping = 1;
-    mon->store->put_int(1, machine_name, "slurping");
+//    get_store()->put(get_name(), "slurping", 1);
   }
 }
 
@@ -1059,7 +1114,8 @@ void Paxos::end_slurping()
 {
   if (slurping == 1) {
     slurping = 0;
-    mon->store->put_int(slurping, machine_name, "slurping");
+  //  get_store()->put(get_name(), "slurping", slurping);
   }
   assert(is_consistent());
 }
+
