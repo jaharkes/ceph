@@ -351,15 +351,24 @@ void Paxos::handle_last(MMonPaxos *last)
       peer_last_committed.clear();
 
       // almost...
-      state = STATE_ACTIVE;
+      // NOTE: we used to go ACTIVE here, and then go back to UPDATING on
+      //       begin(). Those days are over now. We go ACTIVE on the 'else'
+      //       branch, and we go WARMING_UP on the 'if' branch, so we
+      //state = STATE_ACTIVE;
+
+      finish_proposal();
 
       // did we learn an old value?
       if (uncommitted_v == last_committed+1 &&
 	  uncommitted_value.length()) {
 	dout(10) << "that's everyone.  begin on old learned value" << dendl;
+	proposals_lock.Lock();
+	state = STATE_WARMING_UP;
+	proposals_lock.Unlock();
 	begin(uncommitted_value);
       } else {
 	// active!
+	state = STATE_ACTIVE;
 	dout(10) << "that's everyone.  active!" << dendl;
 	extend_lease();
 
@@ -393,7 +402,8 @@ void Paxos::begin(bufferlist& v)
 	   << dendl;
 
   assert(mon->is_leader());
-  assert(is_active());
+//  assert(is_active());
+  assert(state == STATE_WARMING_UP);
   state = STATE_UPDATING;
 
   // we must already have a majority for this to work.
@@ -429,6 +439,7 @@ void Paxos::begin(bufferlist& v)
   if (mon->get_quorum().size() == 1) {
     // we're alone, take it easy
     commit();
+    finish_proposal();
     state = STATE_ACTIVE;
 
     finish_contexts(g_ceph_context, waiting_for_active);
@@ -546,6 +557,7 @@ void Paxos::handle_accept(MMonPaxos *accept)
     accept_timeout_event = 0;
 
     // yay!
+    finish_proposal();
     state = STATE_ACTIVE;
     extend_lease();
 
@@ -697,6 +709,20 @@ void Paxos::warn_on_future_time(utime_t t, entity_name_t from)
     }
   }
 
+}
+
+void Paxos::finish_proposal()
+{
+  dout(10) << __func__ << " finishing proposal" << dendl;
+  Mutex::Locker l(proposals_lock);
+  C_Proposal *proposal = (C_Proposal*) proposals.front();
+  if (!proposal->proposed) {
+    dout(10) << __func__ << " not yet proposed; do not finish it" << dendl;
+    return;
+  }
+  dout(10) << __func__ << " finish it (proposal = " << proposal << ")" << dendl;
+  proposal->finish(0);
+  proposals.pop_front();
 }
 
 // peon
@@ -917,6 +943,8 @@ void Paxos::leader_init()
 {
   cancel_events();
   new_value.clear();
+  if (proposals.size() > 0)
+    proposals.clear();
 
   if (mon->get_quorum().size() == 1) {
     state = STATE_ACTIVE;
@@ -1070,6 +1098,33 @@ bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
     return false;
   }
   */
+
+  assert(mon->is_leader());
+
+  proposals_lock.Lock();
+  proposals.push_back(new C_Proposal(oncommit, bl));
+  if (is_active()) { // we are active, so we may go ahead and propose.
+
+    /* Make sure that anybody that may reach the is_active() condition above
+     * notices that we are no longer in the ACTIVE state. This closes the race
+     * window between us releasing the lock and we start updating on begin(),
+     * and avoids that a new comer proposes the same value we are about to
+     * propose.
+     */
+    state = STATE_WARMING_UP;
+    proposals_lock.Unlock();
+    C_Proposal *proposal = (C_Proposal*) proposals.front();
+    cancel_events();
+    dout(5) << __func__ << " " << (last_committed + 1)
+	    << " " << proposal->bl.length() << " bytes" << dendl;
+    proposal->proposed = true;
+    begin(proposal->bl);
+
+  } else {
+    proposals_lock.Unlock();
+  }
+
+  /*
   
   assert(mon->is_leader() && is_active());
 
@@ -1081,6 +1136,7 @@ bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
   if (oncommit)
     waiting_for_commit.push_back(oncommit);
   begin(bl);
+  */
   
   return true;
 }
