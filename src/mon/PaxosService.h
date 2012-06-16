@@ -114,11 +114,11 @@ protected:
   class C_Active : public Context {
     PaxosService *svc;
   public:
-    C_Active(PaxosService *s) : svc(s) {}
-    void finish(int r) {
+    C_Active(PaxosService *s);// : svc(s) {}
+    void finish(int r);/* {
       if (r >= 0) 
 	svc->_active();
-    }
+    }*/
   };
 
   /**
