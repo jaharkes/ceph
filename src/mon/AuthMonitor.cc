@@ -121,18 +121,27 @@ void AuthMonitor::update_from_paxos()
   assert(version >= keys_ver);
 
   version_t latest_full = get_version_latest_full();
+
+  dout(10) << __func__ << " version " << version << " keys ver " << keys_ver
+           << " latest " << latest_full << dendl;
+
   if ((latest_full > 0) && (latest_full > keys_ver)) {
     bufferlist latest_bl;
     int err = get_version_full(latest_full, latest_bl);
     assert(err == 0);
-    dout(7) << __func__ << " loading summary e" << keys_ver << dendl;
+    assert(latest_bl.length() != 0);
+    keys_ver = latest_full;
+    dout(7) << __func__ << " loading summary e " << latest_full << dendl;
+    dout(7) << __func__ << " latest length " << latest_bl.length() << dendl;
     bufferlist::iterator p = latest_bl.begin();
     __u8 struct_v;
     ::decode(struct_v, p);
     ::decode(max_global_id, p);
     ::decode(mon->key_server, p);
-    mon->key_server.set_ver(keys_ver);
+    mon->key_server.set_ver(latest_full);
   }
+
+  dout(10) << __func__ << " key server version " << mon->key_server.get_ver() << dendl;
 
   // walk through incrementals
   while (version > keys_ver) {
@@ -145,6 +154,9 @@ void AuthMonitor::update_from_paxos()
     // clear out.
     if (keys_ver == 0) 
       mon->key_server.clear_secrets();
+
+    dout(20) << __func__ << " walking through version " << (keys_ver+1)
+             << " len " << bl.length() << dendl;
 
     bufferlist::iterator p = bl.begin();
     __u8 v;
