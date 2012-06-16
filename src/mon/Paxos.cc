@@ -140,7 +140,7 @@ void Paxos::handle_collect(MMonPaxos *collect)
   
     MonitorDBStore::Transaction t;
     t.put(get_name(), "accepted_pn", accepted_pn);
-    JSONFormatter f;
+    JSONFormatter f(true);
     t.dump(&f);
     dout(20) << __func__ << " transaction dump:\n";
     f.flush(*_dout);
@@ -272,7 +272,7 @@ void Paxos::store_state(MMonPaxos *m)
     t.put(get_name(), "first_committed", first_committed);
   }
   if (!t.empty()) {
-    JSONFormatter f;
+    JSONFormatter f(true);
     t.dump(&f);
     dout(20) << __func__ << " transaction dump:\n";
     f.flush(*_dout);
@@ -412,9 +412,15 @@ void Paxos::begin(bufferlist& v)
   MonitorDBStore::Transaction t;
   t.put(get_name(), last_committed+1, new_value);
 
-  JSONFormatter f;
+  JSONFormatter f(true);
   t.dump(&f);
   dout(20) << __func__ << " transaction dump:\n";
+  f.flush(*_dout);
+  MonitorDBStore::Transaction debug_tx;
+  bufferlist::iterator new_value_it = new_value.begin();
+  debug_tx.decode(new_value_it);
+  debug_tx.dump(&f);
+  *_dout << "\nbl dump:\n";
   f.flush(*_dout);
   *_dout << dendl;
 
@@ -480,7 +486,7 @@ void Paxos::handle_begin(MMonPaxos *begin)
   MonitorDBStore::Transaction t;
   t.put(get_name(), v, begin->values[v]);
 
-  JSONFormatter f;
+  JSONFormatter f(true);
   t.dump(&f);
   dout(20) << __func__ << " transaction dump:\n";
   f.flush(*_dout);
@@ -585,7 +591,7 @@ void Paxos::commit()
   // this value can now be read from last_committed.
   decode_append_transaction(t, new_value);
 
-  JSONFormatter f;
+  JSONFormatter f(true);
   t.dump(&f);
   dout(20) << __func__ << " transaction dump:\n";
   f.flush(*_dout);
@@ -837,7 +843,7 @@ void Paxos::trim_to(version_t first, bool force)
   trim_to(&t, first, force);
 
   if (!t.empty()) {
-    JSONFormatter f;
+    JSONFormatter f(true);
     t.dump(&f);
     dout(20) << __func__ << " transaction dump:\n";
     f.flush(*_dout);
@@ -863,7 +869,7 @@ version_t Paxos::get_new_proposal_number(version_t gt)
   // write
   MonitorDBStore::Transaction t;
   t.put(get_name(), "last_pn", last_pn);
-  JSONFormatter f;
+  JSONFormatter f(true);
   t.dump(&f);
   dout(20) << __func__ << " transaction dump:\n";
   f.flush(*_dout);
