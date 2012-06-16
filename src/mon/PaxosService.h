@@ -49,6 +49,11 @@ class PaxosService {
    * be used mainly for store-related operations.
    */
   string service_name;
+  /**
+   * If we are or have queued anything for proposal, this variable will be true
+   * until our proposal has been finished.
+   */
+  bool proposing;
 
  protected:
   /**
@@ -70,8 +75,7 @@ class PaxosService {
    * If the implementation class has anything pending to be proposed to Paxos,
    * then have_pending should be true; otherwise, false.
    */
-  bool have_pending;
-
+  bool have_pending; 
 
 protected:
   /**
@@ -150,6 +154,7 @@ public:
    */
   PaxosService(Monitor *mn, Paxos *p, string name) 
     : mon(mn), paxos(p), service_name(name),
+      proposing(false),
       service_version(0), proposal_timer(0), have_pending(false),
       last_committed_name("last_committed"),
       first_committed_name("first_committed"),
@@ -395,7 +400,7 @@ public:
    * @returns true if in state ACTIVE; false otherwise.
    */
   bool is_active() {
-    return paxos->is_active();
+    return (!proposing && paxos->is_active());
   }
 
   /**
@@ -444,7 +449,7 @@ public:
    * @returns true if writeable; false otherwise
    */
   bool is_writeable() {
-    return paxos->is_writeable();
+    return (!proposing && paxos->is_writeable());
   }
 
   /**
