@@ -1103,6 +1103,16 @@ bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
 
   proposals_lock.Lock();
   proposals.push_back(new C_Proposal(oncommit, bl));
+
+  dout(20) << __func__ << " " << proposals.size() << " in queue:\n";
+  list<Context*>::iterator p_it = proposals.begin();
+  for (int i = 0; p_it != proposals.end(); ++p_it, ++i) {
+    C_Proposal *proposal = (C_Proposal*) *p_it;
+    *_dout << "-- entry #" << i << "\n";
+    *_dout << *proposal << "\n";
+  }
+  *_dout << dendl;
+
   if (is_active()) { // we are active, so we may go ahead and propose.
 
     /* Make sure that anybody that may reach the is_active() condition above
