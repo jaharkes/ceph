@@ -137,7 +137,7 @@ void PaxosService::propose_pending()
 
   JSONFormatter f(true);
   t.dump(&f);
-  dout(20) << __func__ << " transaction dump:\n";
+  dout(30) << __func__ << " transaction dump:\n";
   f.flush(*_dout);
   *_dout << dendl;
   
