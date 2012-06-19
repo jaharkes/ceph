@@ -149,7 +149,7 @@ protected:
       ps->proposing.set(0);
       ps->wakeup_proposing_waiters();
     }
-  }
+  };
   /**
    * @}
    */
@@ -457,15 +457,15 @@ public:
    * @param ver The version we want to check if is readable
    * @returns true if it is readable; false otherwise
    */
-  bool is_readable(version_t ver = 0) {
+  bool is_readable(version_t ver = 0);/* {
     if (ver > get_last_committed())
       return false;
 
     return ((mon->is_peon() || mon->is_leader())
       && (!is_proposing() && !paxos->is_recovering())
       && (get_last_committed() > 0)
-      && ((mon->get_quorum().size == 1) || paxos->is_valid_lease()));
-  }
+      && ((mon->get_quorum().size() == 1) || paxos->is_lease_valid()));
+  }*/
 
   /**
    * Check if we are writeable.
@@ -491,7 +491,7 @@ public:
 
   void wait_for_readable(Context *c) {
     if (is_proposing())
-      wait_for_finished_proposal(c)
+      wait_for_finished_proposal(c);
     else
       paxos->wait_for_readable(c);
   }
