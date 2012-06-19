@@ -53,7 +53,7 @@ class PaxosService {
    * If we are or have queued anything for proposal, this variable will be true
    * until our proposal has been finished.
    */
-  bool proposing;
+  atomic_t proposing;
 
  protected:
   /**
@@ -140,6 +140,16 @@ protected:
       ps->propose_pending(); 
     }
   };
+
+  class C_Committed : public Context {
+    PaxosService *ps;
+  public:
+    C_Committed(PaxosService *p) : ps(p) { }
+    void finish(int r) {
+      ps->proposing.set(0);
+      ps->wakeup_proposing_waiters();
+    }
+  }
   /**
    * @}
    */
@@ -154,13 +164,15 @@ public:
    */
   PaxosService(Monitor *mn, Paxos *p, string name) 
     : mon(mn), paxos(p), service_name(name),
-      proposing(false),
       service_version(0), proposal_timer(0), have_pending(false),
       last_committed_name("last_committed"),
       first_committed_name("first_committed"),
       last_accepted_name("last_accepted"),
       mkfs_name("mkfs"),
-      full_version_name("full"), full_latest_name("latest") { }
+      full_version_name("full"), full_latest_name("latest")
+  {
+    proposing.set(0);
+  }
 
   virtual ~PaxosService() {}
 
@@ -390,7 +402,15 @@ public:
    * @}
    */
 
+  /**
+   */
+  list<Context*> waiting_for_finished_proposal;
+
  public:
+
+  bool is_proposing() {
+    return ((int) proposing.read() == 1);
+  }
 
   /**
    * Check if we are in the Paxos ACTIVE state.
@@ -400,10 +420,13 @@ public:
    * @returns true if in state ACTIVE; false otherwise.
    */
   bool is_active() {
-    return (!proposing && !paxos->is_recovering());
+    return (!is_proposing() && !paxos->is_recovering());
   }
 
   /**
+   * TODO: FIXME: Most of this is no longer valid. Rework it. Seriously. I just
+   * TODO: FIXME: don't have the time right now.
+   *
    * Check if we are readable.
    *
    * The services implementing us used to rely on this function to check if
@@ -439,7 +462,7 @@ public:
       return false;
 
     return ((mon->is_peon() || mon->is_leader())
-      && (!proposing && !paxos->is_recovering())
+      && (!is_proposing() && !paxos->is_recovering())
       && (get_last_committed() > 0)
       && ((mon->get_quorum().size == 1) || paxos->is_valid_lease()));
   }
@@ -452,8 +475,35 @@ public:
    * @returns true if writeable; false otherwise
    */
   bool is_writeable() {
-    return (!proposing && mon->is_leader() && paxos->is_lease_valid());
+    return (!is_proposing() && mon->is_leader() && paxos->is_lease_valid());
   }
+
+  void wait_for_finished_proposal(Context *c) {
+    waiting_for_finished_proposal.push_back(c);
+  }
+
+  void wait_for_active(Context *c) {
+    if (is_proposing())
+      wait_for_finished_proposal(c);
+    else
+      paxos->wait_for_active(c);
+  }
+
+  void wait_for_readable(Context *c) {
+    if (is_proposing())
+      wait_for_finished_proposal(c)
+    else
+      paxos->wait_for_readable(c);
+  }
+
+  void wait_for_writeable(Context *c) {
+    if (is_proposing())
+      wait_for_finished_proposal(c);
+    else
+      paxos->wait_for_writeable(c);
+  }
+
+  void wakeup_proposing_waiters();
 
   /**
    * Trim our log. This implies getting rid of versions on the k/v store.
