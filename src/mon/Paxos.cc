@@ -362,9 +362,7 @@ void Paxos::handle_last(MMonPaxos *last)
       if (uncommitted_v == last_committed+1 &&
 	  uncommitted_value.length()) {
 	dout(10) << "that's everyone.  begin on old learned value" << dendl;
-	proposals_lock.Lock();
-	state = STATE_WARMING_UP;
-	proposals_lock.Unlock();
+	state = STATE_PREPARING;
 	begin(uncommitted_value);
       } else {
 	// active!
@@ -403,7 +401,7 @@ void Paxos::begin(bufferlist& v)
 
   assert(mon->is_leader());
 //  assert(is_active());
-  assert(state == STATE_WARMING_UP);
+  assert(state == STATE_PREPARING);
   state = STATE_UPDATING;
 
   // we must already have a majority for this to work.
@@ -714,7 +712,6 @@ void Paxos::warn_on_future_time(utime_t t, entity_name_t from)
 void Paxos::finish_proposal()
 {
   dout(10) << __func__ << " finishing proposal" << dendl;
-  Mutex::Locker l(proposals_lock);
   C_Proposal *proposal = (C_Proposal*) proposals.front();
   if (!proposal->proposed) {
     dout(10) << __func__ << " not yet proposed; do not finish it" << dendl;
@@ -1101,7 +1098,6 @@ bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
 
   assert(mon->is_leader());
 
-  proposals_lock.Lock();
   proposals.push_back(new C_Proposal(oncommit, bl));
 
   dout(20) << __func__ << " " << proposals.size() << " in queue:\n";
@@ -1121,8 +1117,7 @@ bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
      * and avoids that a new comer proposes the same value we are about to
      * propose.
      */
-    state = STATE_WARMING_UP;
-    proposals_lock.Unlock();
+    state = STATE_PREPARING;
     C_Proposal *proposal = (C_Proposal*) proposals.front();
     cancel_events();
     dout(5) << __func__ << " " << (last_committed + 1)
