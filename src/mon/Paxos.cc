@@ -356,7 +356,12 @@ void Paxos::handle_last(MMonPaxos *last)
       //       branch, and we go WARMING_UP on the 'if' branch, so we
       //state = STATE_ACTIVE;
 
-      finish_proposal();
+      /*
+       * We get to the handle_last() only during recovery. And during recovery
+       * there are no services proposing values; therefore, there is no
+       * proposal; thus do not finish something that does not exist!
+       */
+      //finish_proposal();
 
       // did we learn an old value?
       if (uncommitted_v == last_committed+1 &&
@@ -1109,25 +1114,27 @@ bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
   }
   *_dout << dendl;
 
-  if (is_active()) { // we are active, so we may go ahead and propose.
+  if (!is_active())
+    return true;
 
-    /* Make sure that anybody that may reach the is_active() condition above
-     * notices that we are no longer in the ACTIVE state. This closes the race
-     * window between us releasing the lock and we start updating on begin(),
-     * and avoids that a new comer proposes the same value we are about to
-     * propose.
-     */
-    state = STATE_PREPARING;
-    C_Proposal *proposal = (C_Proposal*) proposals.front();
-    cancel_events();
-    dout(5) << __func__ << " " << (last_committed + 1)
-	    << " " << proposal->bl.length() << " bytes" << dendl;
-    proposal->proposed = true;
-    begin(proposal->bl);
+  // we are active, so we may go ahead and propose.
 
-  } else {
-    proposals_lock.Unlock();
-  }
+  /* Make sure that anybody that may reach the is_active() condition above
+   * notices that we are no longer in the ACTIVE state. This closes the race
+   * window between us releasing the lock and we start updating on begin(),
+   * and avoids that a new comer proposes the same value we are about to
+   * propose.
+   *
+   * NOTE: I no longer believe there is any race window to speak of. Further
+   * details after having lunch.
+   */
+  state = STATE_PREPARING;
+  C_Proposal *proposal = (C_Proposal*) proposals.front();
+  cancel_events();
+  dout(5) << __func__ << " " << (last_committed + 1)
+	  << " " << proposal->bl.length() << " bytes" << dendl;
+  proposal->proposed = true;
+  begin(proposal->bl);
 
   /*
   

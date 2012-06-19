@@ -971,7 +971,6 @@ public:
 		   lease_ack_timeout_event(0),
 		   lease_timeout_event(0),
 		   accept_timeout_event(0),
-		   proposals_lock("Paxos Proposals Lock"),
 		   clock_drift_warned(0) { }
 
   const string get_name() const {
