@@ -1303,7 +1303,7 @@ void OSDMonitor::send_to_waiting()
 
 void OSDMonitor::send_latest(PaxosServiceMessage *m, epoch_t start)
 {
-  if (paxos->is_readable()) {
+  if (is_readable()) {
     dout(5) << "send_latest to " << m->get_orig_source_inst()
 	    << " start " << start << dendl;
     if (start == 0)
@@ -1476,8 +1476,7 @@ void OSDMonitor::check_sub(Subscription *sub)
 
 void OSDMonitor::tick()
 {
-  if (!paxos->is_active())
-    return;
+  if (!is_active()) return;
 
   update_from_paxos();
   dout(10) << osdmap << dendl;
