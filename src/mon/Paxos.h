@@ -1169,10 +1169,13 @@ public:
    */
 
   /**
-   * @warning This declaration is not implemented anywhere and appears to be
-   *	      just some lingering code.
+   * Check if we have a valid lease.
+   *
+   * @returns true if the lease is still valid; false otherwise.
    */
-  bool is_leader();
+  bool is_lease_valid() {
+    return (ceph_clock_now(g_ceph_context) < lease_expire);
+  }
   // write
   /**
    * @defgroup Paxos_h_write_funcs Write-related functions
