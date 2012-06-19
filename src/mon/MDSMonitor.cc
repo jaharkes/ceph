@@ -716,7 +716,7 @@ int MDSMonitor::cluster_fail(std::ostream &ss)
     ss << "mdsmap must be marked DOWN first ('mds cluster_down')";
     return -EPERM;
   }
-  if (pending_mdsmap.up.size() && !mon->osdmon()->paxos->is_writeable()) {
+  if (pending_mdsmap.up.size() && !mon->osdmon()->is_writeable()) {
     ss << "osdmap not writeable, can't blacklist up mds's";
     return -EAGAIN;
   }
@@ -999,8 +999,7 @@ void MDSMonitor::tick()
 {
   // make sure mds's are still alive
   // ...if i am an active leader
-  if (!paxos->is_active())
-    return;
+  if (!is_active()) return;
 
   update_from_paxos();
   dout(10) << mdsmap << dendl;
@@ -1054,7 +1053,7 @@ void MDSMonitor::tick()
     }
   }
 
-  if (mon->osdmon()->paxos->is_writeable()) {
+  if (mon->osdmon()->is_writeable()) {
 
     bool propose_osdmap = false;
 
@@ -1259,7 +1258,7 @@ void MDSMonitor::do_stop()
 {
   // hrm...
   if (!mon->is_leader() ||
-      !paxos->is_active()) {
+      !is_active()) {
     dout(0) << "do_stop can't stop right now, mdsmap not writeable" << dendl;
     return;
   }
