@@ -246,18 +246,24 @@ void AuthMonitor::encode_pending(MonitorDBStore::Transaction *t)
   for (p = pending_auth.begin(); p != pending_auth.end(); p++)
     p->encode(bl, mon->get_quorum_features());
 
-  bufferlist full_bl;
-  v = 1;
-  ::encode(v, full_bl);
-  ::encode(max_global_id, full_bl);
-  Mutex::Locker l(mon->key_server.get_lock());
-  ::encode(mon->key_server, full_bl);
 
   version_t version = get_version() + 1;
   put_version(t, version, bl);
   put_last_committed(t, version);
-  put_version_full(t, version, full_bl);
-  put_version_latest_full(t, version);
+
+  bufferlist full_bl;
+  Mutex::Locker l(mon->key_server.get_lock());
+  if (mon->key_server.has_secrets()) {
+    dout(10) << __func__ << " key server has secrets!" << dendl;
+    v = 1;
+    ::encode(v, full_bl);
+    ::encode(max_global_id, full_bl);
+    ::encode(mon->key_server, full_bl);
+
+    put_version_full(t, version, full_bl);
+    put_version_latest_full(t, version);
+  } else
+    dout(10) << __func__ << " key server has no secrets; do not put them in tx" << dendl;
 }
 
 bool AuthMonitor::preprocess_query(PaxosServiceMessage *m)
