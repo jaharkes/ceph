@@ -442,9 +442,8 @@ void Paxos::begin(bufferlist& v)
   if (mon->get_quorum().size() == 1) {
     // we're alone, take it easy
     commit();
-    finish_proposal();
     state = STATE_ACTIVE;
-
+    finish_proposal();
     finish_contexts(g_ceph_context, waiting_for_active);
     finish_contexts(g_ceph_context, waiting_for_commit);
     finish_contexts(g_ceph_context, waiting_for_readable);
@@ -560,9 +559,10 @@ void Paxos::handle_accept(MMonPaxos *accept)
     accept_timeout_event = 0;
 
     // yay!
-    finish_proposal();
     state = STATE_ACTIVE;
     extend_lease();
+  
+    finish_proposal();
 
     // wake people up
     finish_contexts(g_ceph_context, waiting_for_active);
@@ -716,15 +716,56 @@ void Paxos::warn_on_future_time(utime_t t, entity_name_t from)
 
 void Paxos::finish_proposal()
 {
+  /* There is a lot of debug still going around. We will get rid of it later
+   * on, as soon as everything "just works (tm)"
+   */
+
   dout(10) << __func__ << " finishing proposal" << dendl;
   C_Proposal *proposal = (C_Proposal*) proposals.front();
-  if (!proposal->proposed) {
-    dout(10) << __func__ << " not yet proposed; do not finish it" << dendl;
+  dout(10) << __func__ << " finish it (proposal = "
+	   << proposal << ")" << dendl;;
+
+  if (!proposal) // this is okay. It happens when we propose an old value.
     return;
+
+  if (!proposal->proposed) {
+    dout(10) << __func__ << " we must have received a stay message and we're "
+             << "trying to finish before time. "
+	     << "Instead, propose it (if we are active)!" << dendl;
+  } else {
+    proposal->finish(0);
+    proposals.pop_front();
   }
-  dout(10) << __func__ << " finish it (proposal = " << proposal << ")" << dendl;
-  proposal->finish(0);
-  proposals.pop_front();
+
+  dout(10) << __func__ << " state " << state
+	   << " proposals left " << proposals.size() << dendl;
+
+  if (is_active() && (proposals.size() > 0)) {
+    state = STATE_PREPARING;
+
+    C_Proposal *proposal = (C_Proposal*) proposals.front();
+    cancel_events();
+    dout(5) << __func__ << " " << (last_committed + 1)
+	    << " " << proposal->bl.length() << " bytes" << dendl;
+  
+   proposal->proposed = true;
+
+    /* This code is a duplicate from the one in Paxos::begin(). We are aware
+     * of that. Don't be frightned by that. "Everthing [will end up] in its
+     * right place". And by that we mean that this piece of debug code will
+     * go away.
+     */
+    dout(20) << __func__ << " " << proposals.size() << " in queue:\n";
+    list<Context*>::iterator p_it = proposals.begin();
+    for (int i = 0; p_it != proposals.end(); ++p_it, ++i) {
+      C_Proposal *proposal = (C_Proposal*) *p_it;
+      *_dout << "-- entry #" << i << "\n";
+      *_dout << *proposal << "\n";
+    }
+    *_dout << dendl;
+
+    begin(proposal->bl);
+  }
 }
 
 // peon
