@@ -405,7 +405,6 @@ void Paxos::begin(bufferlist& v)
 	   << dendl;
 
   assert(mon->is_leader());
-//  assert(is_active());
   assert(state == STATE_PREPARING);
   state = STATE_UPDATING;
 

@@ -1166,7 +1166,7 @@ public:
    * @param onreadable A callback
    */
   void wait_for_readable(Context *onreadable) {
-    //assert(!is_readable());
+    assert(!is_readable());
     waiting_for_readable.push_back(onreadable);
   }
   /**
