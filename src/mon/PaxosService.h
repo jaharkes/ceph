@@ -489,8 +489,15 @@ public:
       paxos->wait_for_active(c);
   }
 
-  void wait_for_readable(Context *c) {
-    if (is_proposing())
+  void wait_for_readable(Context *c, version_t ver = 0) {
+    /* This is somewhat of a hack. We only do check if a version is readable on
+     * PaxosService::dispatch(), but, nonetheless, we must make sure that if that
+     * is why we are not readable, then we must wait on PaxosService and not on
+     * Paxos; otherwise, we may assert on Paxos::wait_for_readable() if it
+     * happens to be readable at that specific point in time.
+     */
+    if (is_proposing() || (ver > get_last_committed())
+	|| (get_last_committed() <= 0))
       wait_for_finished_proposal(c);
     else
       paxos->wait_for_readable(c);
