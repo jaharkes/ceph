@@ -140,7 +140,8 @@ bool PaxosService::should_propose(double& delay)
 void PaxosService::propose_pending()
 {
   dout(10) << "propose_pending" << dendl;
-  //assert(have_pending);
+  assert(have_pending);
+#if 0
   if (!have_pending) {
     /* If we do not have a pending value, it means we must have recently
      * proposed and we are not yet ready to propose again; hence, return.
@@ -148,8 +149,9 @@ void PaxosService::propose_pending()
     dout(10) << __func__ << " do not propose just yet!" << dendl;
     return;
   }
+#endif
   assert(mon->is_leader());
-  //assert(is_active());
+  assert(is_active());
   if (!is_active())
     return;
 
