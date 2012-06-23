@@ -946,6 +946,10 @@ private:
    */
   void warn_on_future_time(utime_t t, entity_name_t from);
 
+  /**
+   * Begin proposing the Proposal at the front of the proposals queue.
+   */
+  void propose_queued();
   void finish_proposal();
 
 public:
@@ -1202,6 +1206,13 @@ public:
     waiting_for_writeable.push_back(c);
   }
 
+  /**
+   * List all queued proposals
+   *
+   * @param out[out] Output Stream onto which we will output the list
+   *		     of queued proposals.
+   */
+  void list_proposals(ostream& out);
   /**
    * Propose a new value to the Leader.
    *

@@ -741,30 +741,7 @@ void Paxos::finish_proposal()
 	   << " proposals left " << proposals.size() << dendl;
 
   if (is_active() && (proposals.size() > 0)) {
-    state = STATE_PREPARING;
-
-    C_Proposal *proposal = (C_Proposal*) proposals.front();
-    cancel_events();
-    dout(5) << __func__ << " " << (last_committed + 1)
-	    << " " << proposal->bl.length() << " bytes" << dendl;
-  
-   proposal->proposed = true;
-
-    /* This code is a duplicate from the one in Paxos::begin(). We are aware
-     * of that. Don't be frightned by that. "Everthing [will end up] in its
-     * right place". And by that we mean that this piece of debug code will
-     * go away.
-     */
-    dout(20) << __func__ << " " << proposals.size() << " in queue:\n";
-    list<Context*>::iterator p_it = proposals.begin();
-    for (int i = 0; p_it != proposals.end(); ++p_it, ++i) {
-      C_Proposal *proposal = (C_Proposal*) *p_it;
-      *_dout << "-- entry #" << i << "\n";
-      *_dout << *proposal << "\n";
-    }
-    *_dout << dendl;
-
-    begin(proposal->bl);
+    propose_queued();
   }
 }
 
@@ -1127,69 +1104,51 @@ bool Paxos::is_writeable()
     ceph_clock_now(g_ceph_context) < lease_expire;
 }
 
-bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
+void Paxos::list_proposals(ostream& out)
 {
-  /*
-  // writeable?
-  if (!is_writeable()) {
-    dout(5) << "propose_new_value " << last_committed+1 << " " << bl.length() << " bytes"
-	    << " -- not writeable" << dendl;
-    if (oncommit) {
-      oncommit->finish(-1);
-      delete oncommit;
-    }
-    return false;
-  }
-  */
-
-  assert(mon->is_leader());
-
-  proposals.push_back(new C_Proposal(oncommit, bl));
-
-  dout(20) << __func__ << " " << proposals.size() << " in queue:\n";
+  out << __func__ << " " << proposals.size() << " in queue:\n";
   list<Context*>::iterator p_it = proposals.begin();
   for (int i = 0; p_it != proposals.end(); ++p_it, ++i) {
-    C_Proposal *proposal = (C_Proposal*) *p_it;
-    *_dout << "-- entry #" << i << "\n";
-    *_dout << *proposal << "\n";
+    C_Proposal *p = (C_Proposal*) *p_it;
+    out << "-- entry #" << i << "\n";
+    out << *p << "\n";
   }
-  *_dout << dendl;
+}
 
-  if (!is_active())
-    return true;
+void Paxos::propose_queued()
+{
+  assert(!is_active());
+  assert(proposals.size() > 0);
 
-  // we are active, so we may go ahead and propose.
-
-  /* Make sure that anybody that may reach the is_active() condition above
-   * notices that we are no longer in the ACTIVE state. This closes the race
-   * window between us releasing the lock and we start updating on begin(),
-   * and avoids that a new comer proposes the same value we are about to
-   * propose.
-   *
-   * NOTE: I no longer believe there is any race window to speak of. Further
-   * details after having lunch.
-   */
   state = STATE_PREPARING;
+
   C_Proposal *proposal = (C_Proposal*) proposals.front();
+  assert(!proposal->proposed);
+
   cancel_events();
   dout(5) << __func__ << " " << (last_committed + 1)
 	  << " " << proposal->bl.length() << " bytes" << dendl;
   proposal->proposed = true;
+
+  dout(10) << __func__ << " ";
+  list_proposals(*_dout);
+  *_dout << dendl;
+
   begin(proposal->bl);
+}
 
-  /*
-  
-  assert(mon->is_leader() && is_active());
+bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
+{
+  assert(mon->is_leader());
 
-  // cancel lease renewal and timeout events.
-  cancel_events();
+  proposals.push_back(new C_Proposal(oncommit, bl));
 
-  // ok!
-  dout(5) << "propose_new_value " << last_committed+1 << " " << bl.length() << " bytes" << dendl;
-  if (oncommit)
-    waiting_for_commit.push_back(oncommit);
-  begin(bl);
-  */
+  if (!is_active()) {
+    dout(5) << __func__ << " not active; proposal queued" << dendl; 
+    return true;
+  }
+
+  propose_queued();
   
   return true;
 }
