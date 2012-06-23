@@ -1279,7 +1279,8 @@ public:
 
 inline ostream& operator<<(ostream& out, Paxos::C_Proposal& p)
 {
-  out << " proposed = " << p.proposed << ", tx =\n";
+  string proposed = (p.proposed ? "proposed" : "unproposed");
+  out << " " << proposed << ", tx =\n";
   MonitorDBStore::Transaction t;
   bufferlist::iterator p_it = p.bl.begin();
   t.decode(p_it);
