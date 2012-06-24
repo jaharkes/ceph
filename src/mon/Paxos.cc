@@ -736,8 +736,8 @@ void Paxos::finish_proposal()
 	     << (ceph_clock_now(NULL) - proposal->proposal_time)
 	     << " to finish" << dendl;
 
-    proposal->finish(0);
     proposals.pop_front();
+    proposal->finish(0);
   }
 
   dout(10) << __func__ << " state " << state
