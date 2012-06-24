@@ -732,6 +732,10 @@ void Paxos::finish_proposal()
              << "trying to finish before time. "
 	     << "Instead, propose it (if we are active)!" << dendl;
   } else {
+    dout(10) << __func__ << " proposal took "
+	     << (ceph_clock_now(NULL) - proposal->proposal_time)
+	     << " to finish" << dendl;
+
     proposal->finish(0);
     proposals.pop_front();
   }
