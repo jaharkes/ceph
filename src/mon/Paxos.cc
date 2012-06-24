@@ -743,7 +743,7 @@ void Paxos::finish_proposal()
   dout(10) << __func__ << " state " << state
 	   << " proposals left " << proposals.size() << dendl;
 
-  if (is_active() && (proposals.size() > 0)) {
+  if (is_active() && mon->is_leader() && (proposals.size() > 0)) {
     propose_queued();
   }
 }
