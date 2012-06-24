@@ -256,6 +256,10 @@ void PaxosService::_active()
     }
   }
 
+  /* wake people up before calling on_active(). We don't know how long we'll be
+   * on the service's on_active(), and we really should wake people up!
+   */
+  wakeup_proposing_waiters();
   // NOTE: it's possible that this will get called twice if we commit
   // an old paxos value.  Implementations should be mindful of that.
   if (is_active())

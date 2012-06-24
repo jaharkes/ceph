@@ -147,7 +147,15 @@ protected:
     C_Committed(PaxosService *p) : ps(p) { }
     void finish(int r) {
       ps->proposing.set(0);
+      /* We should wake people up *only* *after* we inform the service we
+       * just went active. And we should wake people up only once we finish
+       * going active. This way we avoid waking up the wrong people at the
+       * wrong time, such as waking up a C_RetryMessage before waking up a
+       * C_Active, thus ending up without a pending value.
+       *
       ps->wakeup_proposing_waiters();
+       */
+      ps->_active();
     }
   };
   /**
