@@ -603,11 +603,13 @@ public:
     bufferlist bl;
     // for debug purposes. Will go away. Soon.
     bool proposed;
+    utime_t proposal_time;
 
     C_Proposal(Context *c, bufferlist& proposal_bl) : 
 	proposer_context(c),
 	bl(proposal_bl),
-        proposed(false)
+        proposed(false),
+	proposal_time(ceph_clock_now(NULL))
       { }
     
     void finish(int r) {
@@ -1280,7 +1282,9 @@ public:
 inline ostream& operator<<(ostream& out, Paxos::C_Proposal& p)
 {
   string proposed = (p.proposed ? "proposed" : "unproposed");
-  out << " " << proposed << ", tx =\n";
+  out << " " << proposed
+      << " queued " << (ceph_clock_now(NULL) - p.proposal_time)
+      << " tx dump:\n";
   MonitorDBStore::Transaction t;
   bufferlist::iterator p_it = p.bl.begin();
   t.decode(p_it);
