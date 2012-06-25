@@ -979,8 +979,7 @@ public:
 		   lease_timeout_event(0),
 		   accept_timeout_event(0),
 		   clock_drift_warned(0),
-		   going_to_bootstrap(false),
-		   proposals_done("Proposals Done Mutex") { }
+		   going_to_bootstrap(false) { }
 
   const string get_name() const {
     return paxos_name;
