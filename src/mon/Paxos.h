@@ -519,8 +519,6 @@ private:
    */
 
   bool going_to_bootstrap;
-  Cond proposals_done_cond;
-  Mutex proposals_done;
 
   /**
    * @defgroup Paxos_h_callbacks Callback classes.
