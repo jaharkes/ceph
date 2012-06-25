@@ -130,7 +130,6 @@ void AuthMonitor::update_from_paxos()
     int err = get_version_full(latest_full, latest_bl);
     assert(err == 0);
     assert(latest_bl.length() != 0);
-    keys_ver = latest_full;
     dout(7) << __func__ << " loading summary e " << latest_full << dendl;
     dout(7) << __func__ << " latest length " << latest_bl.length() << dendl;
     bufferlist::iterator p = latest_bl.begin();
@@ -245,7 +244,6 @@ void AuthMonitor::encode_pending(MonitorDBStore::Transaction *t)
   vector<Incremental>::iterator p;
   for (p = pending_auth.begin(); p != pending_auth.end(); p++)
     p->encode(bl, mon->get_quorum_features());
-
 
   version_t version = get_version() + 1;
   put_version(t, version, bl);
