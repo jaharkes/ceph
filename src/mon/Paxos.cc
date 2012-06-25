@@ -999,6 +999,9 @@ void Paxos::restart()
   dout(10) << "restart -- canceling timeouts" << dendl;
   cancel_events();
   new_value.clear();
+  dout(10) << __func__ << " -- clearing queued proposals" << dendl;
+  if (proposals.size() > 0)
+    proposals.clear();
 
   finish_contexts(g_ceph_context, waiting_for_commit, -EAGAIN);
   finish_contexts(g_ceph_context, waiting_for_active, -EAGAIN);
