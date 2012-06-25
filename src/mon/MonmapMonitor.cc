@@ -109,8 +109,10 @@ void MonmapMonitor::update_from_paxos()
     mon->store->apply_transaction(t);
   }
 
-  if (need_restart)
+  if (need_restart) {
+    paxos->prepare_bootstrap();
     mon->bootstrap();
+  }
 }
 
 void MonmapMonitor::create_pending()
