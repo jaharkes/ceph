@@ -37,6 +37,15 @@ static ostream& _prefix(std::ostream *_dout, Monitor *mon, const string& name,
 		<< ") ";
 }
 
+void Paxos::prepare_bootstrap()
+{
+  dout(0) << __func__ << dendl;
+
+  going_to_bootstrap = true;
+  proposals_done.Lock();
+  proposals_done_cond.Wait(proposals_done);
+}
+
 MonitorDBStore *Paxos::get_store()
 {
   return mon->store;
@@ -743,6 +752,12 @@ void Paxos::finish_proposal()
   dout(10) << __func__ << " state " << state
 	   << " proposals left " << proposals.size() << dendl;
 
+  if ((proposals.size() == 0) && going_to_bootstrap) {
+    dout(0) << __func__ << " no more proposals; signaling to bootstrap." << dendl;
+    proposals_done_cond.Signal();
+    return;
+  }
+
   if (is_active() && mon->is_leader() && (proposals.size() > 0)) {
     propose_queued();
   }
@@ -969,6 +984,8 @@ void Paxos::leader_init()
   if (proposals.size() > 0)
     proposals.clear();
 
+  going_to_bootstrap = false;
+
   if (mon->get_quorum().size() == 1) {
     state = STATE_ACTIVE;
     return;
@@ -1002,6 +1019,8 @@ void Paxos::restart()
   dout(10) << __func__ << " -- clearing queued proposals" << dendl;
   if (proposals.size() > 0)
     proposals.clear();
+
+  going_to_bootstrap = false;
 
   finish_contexts(g_ceph_context, waiting_for_commit, -EAGAIN);
   finish_contexts(g_ceph_context, waiting_for_active, -EAGAIN);

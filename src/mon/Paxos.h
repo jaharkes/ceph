@@ -518,6 +518,9 @@ private:
    * @}
    */
 
+  bool going_to_bootstrap;
+  Cond proposals_done_cond;
+  Mutex proposals_done;
 
   /**
    * @defgroup Paxos_h_callbacks Callback classes.
@@ -977,11 +980,16 @@ public:
 		   lease_ack_timeout_event(0),
 		   lease_timeout_event(0),
 		   accept_timeout_event(0),
-		   clock_drift_warned(0) { }
+		   clock_drift_warned(0),
+		   going_to_bootstrap(false),
+		   proposals_done("Proposals Done Mutex") { }
 
   const string get_name() const {
     return paxos_name;
   }
+
+  bool is_bootstrapping() { return going_to_bootstrap; }
+  void prepare_bootstrap();
 
   void dispatch(PaxosServiceMessage *m);
 
