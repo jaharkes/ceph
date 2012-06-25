@@ -214,6 +214,7 @@ void PaxosService::election_finished()
     discard_pending();
     have_pending = false;
   }
+  proposing.set(0);
 
   // make sure we update our state
   if (is_active())
