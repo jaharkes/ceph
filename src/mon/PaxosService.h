@@ -580,6 +580,15 @@ public:
    */
   void put_last_committed(MonitorDBStore::Transaction *t, version_t ver) {
     t->put(get_service_name(), last_committed_name, ver);
+
+    /* We only need to do this once, and that is when we are about to make our
+     * first proposal. There are some services that rely on first_committed
+     * being set -- and it should! -- so we need to guarantee that it is,
+     * specially because the services itself do not do it themselves. They do
+     * rely on it, but they expect us to deal with it, and so we shall.
+     */
+    if (!get_first_committed())
+      put_first_committed(t, ver);
   }
   /**
    * Put the contents of @p bl into version @p ver
