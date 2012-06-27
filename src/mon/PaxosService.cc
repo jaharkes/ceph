@@ -197,6 +197,8 @@ void PaxosService::restart()
     mon->timer.cancel_event(proposal_timer);
     proposal_timer = 0;
   }
+  // ignore any callbacks waiting for us to finish our proposal
+  waiting_for_finished_proposal.clear();
 
   on_restart();
 }
@@ -215,6 +217,9 @@ void PaxosService::election_finished()
     have_pending = false;
   }
   proposing.set(0);
+
+  // ignore any callbacks waiting for us to finish our proposal
+  waiting_for_finished_proposal.clear();
 
   // make sure we update our state
   if (is_active())
@@ -276,6 +281,8 @@ void PaxosService::shutdown()
     mon->timer.cancel_event(proposal_timer);
     proposal_timer = 0;
   }
+  // ignore any callbacks waiting for us to finish our proposal
+  waiting_for_finished_proposal.clear();
 }
 
 void PaxosService::put_version(MonitorDBStore::Transaction *t,
