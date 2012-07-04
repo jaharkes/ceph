@@ -1227,9 +1227,9 @@ public:
    * will trigger a new proposal.
    *
    * @param bl A bufferlist holding the value to be proposed
-   * @param oncommit A callback to be fired up once we finish committing bl
+   * @param onfinish A callback to be fired up once we finish the proposal
    */
-  bool propose_new_value(bufferlist& bl, Context *oncommit=0);
+  bool propose_new_value(bufferlist& bl, Context *onfinished=0);
   /**
    * Add oncommit to the back of the list of callbacks waiting for us to
    * finish committing.

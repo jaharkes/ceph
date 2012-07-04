@@ -1160,11 +1160,11 @@ void Paxos::propose_queued()
   begin(proposal->bl);
 }
 
-bool Paxos::propose_new_value(bufferlist& bl, Context *oncommit)
+bool Paxos::propose_new_value(bufferlist& bl, Context *onfinished)
 {
   assert(mon->is_leader());
 
-  proposals.push_back(new C_Proposal(oncommit, bl));
+  proposals.push_back(new C_Proposal(onfinished, bl));
 
   if (!is_active()) {
     dout(5) << __func__ << " not active; proposal queued" << dendl; 
