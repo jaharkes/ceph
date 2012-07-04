@@ -806,9 +806,6 @@ void Paxos::handle_lease(MMonPaxos *lease)
   lease_timeout_event = new C_LeaseTimeout(this);
   mon->timer.add_event_after(g_conf->mon_lease_ack_timeout, lease_timeout_event);
 
-  // trim?
-  trim_to(lease->first_committed);
-  
   // kick waiters
   finish_contexts(g_ceph_context, waiting_for_active);
   if (is_readable())
