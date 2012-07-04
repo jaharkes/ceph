@@ -725,6 +725,7 @@ void Paxos::finish_proposal()
   /* There is a lot of debug still going around. We will get rid of it later
    * on, as soon as everything "just works (tm)"
    */
+  assert(mon->is_leader());
 
   dout(10) << __func__ << " finishing proposal" << dendl;
   C_Proposal *proposal = (C_Proposal*) proposals.front();
@@ -756,7 +757,8 @@ void Paxos::finish_proposal()
     return;
   }
 
-  if (is_active() && mon->is_leader() && (proposals.size() > 0)) {
+
+  if (is_active() && (proposals.size() > 0)) {
     propose_queued();
   }
 }
