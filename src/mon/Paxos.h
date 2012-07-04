@@ -950,6 +950,14 @@ private:
   void warn_on_future_time(utime_t t, entity_name_t from);
 
   /**
+   * Queue a new proposal by pushing it at the back of the queue; do not
+   * propose it.
+   *
+   * @param bl The bufferlist to be proposed
+   * @param onfinished The callback to be called once the proposal finishes
+   */
+  void queue_proposal(bufferlist& bl, Context *onfinished);
+  /**
    * Begin proposing the Proposal at the front of the proposals queue.
    */
   void propose_queued();
