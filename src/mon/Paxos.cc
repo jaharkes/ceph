@@ -757,6 +757,15 @@ void Paxos::finish_proposal()
     return;
   }
 
+  int available_versions = (get_version() - get_first_committed());
+  int maximum_versions =
+    (g_conf->paxos_max_join_drift + g_conf->paxos_trim_tolerance);
+
+  if (!going_to_trim && (available_versions > maximum_versions)) {
+    version_t trim_to_version = get_version() - g_conf->paxos_max_join_drift;
+
+    trim_to(trim_to_version);
+  }
 
   if (is_active() && (proposals.size() > 0)) {
     propose_queued();
@@ -833,6 +842,8 @@ void Paxos::handle_lease_ack(MMonPaxos *ack)
 	       << " -- got everyone" << dendl;
       mon->timer.cancel_event(lease_ack_timeout_event);
       lease_ack_timeout_event = 0;
+
+
     } else {
       dout(10) << "handle_lease_ack from " << ack->get_source() 
 	       << " -- still need "
@@ -909,7 +920,12 @@ void Paxos::trim_to(version_t first, bool force)
     dout(30) << __func__ << " transaction dump:\n";
     f.flush(*_dout);
     *_dout << dendl;
-    get_store()->apply_transaction(t);
+
+    bufferlist bl;
+    t.encode(bl);
+
+    going_to_trim = true;
+    queue_proposal(bl, new C_Trimmed(this));
   }
 }
 

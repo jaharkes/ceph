@@ -519,6 +519,11 @@ private:
    */
 
   bool going_to_bootstrap;
+  /**
+   * Should be true if we have proposed to trim, or are in the middle of
+   * trimming; false otherwise.
+   */
+  bool going_to_trim;
 
   /**
    * @defgroup Paxos_h_callbacks Callback classes.
@@ -594,6 +599,14 @@ private:
     }
   };
 
+  class C_Trimmed : public Context {
+    Paxos *paxos;
+  public:
+    C_Trimmed(Paxos *p) : paxos(p) { }
+    void finish(int r) {
+      paxos->going_to_trim = false;
+    }
+  };
   /**
    *
    */
@@ -987,7 +1000,8 @@ public:
 		   lease_timeout_event(0),
 		   accept_timeout_event(0),
 		   clock_drift_warned(0),
-		   going_to_bootstrap(false) { }
+		   going_to_bootstrap(false),
+		   going_to_trim(false) { }
 
   const string get_name() const {
     return paxos_name;
