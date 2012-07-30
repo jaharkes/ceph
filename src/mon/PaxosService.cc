@@ -141,15 +141,6 @@ void PaxosService::propose_pending()
 {
   dout(10) << "propose_pending" << dendl;
   assert(have_pending);
-#if 0
-  if (!have_pending) {
-    /* If we do not have a pending value, it means we must have recently
-     * proposed and we are not yet ready to propose again; hence, return.
-     */
-    dout(10) << __func__ << " do not propose just yet!" << dendl;
-    return;
-  }
-#endif
   assert(mon->is_leader());
   assert(is_active());
   if (!is_active())
@@ -183,7 +174,6 @@ void PaxosService::propose_pending()
   t.encode(bl);
 
   // apply to paxos
-//  paxos->wait_for_commit_front(new C_Active(this));
   proposing.set(1);
   paxos->propose_new_value(bl, new C_Committed(this));
 }
