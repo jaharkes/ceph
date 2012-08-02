@@ -265,6 +265,12 @@ void Paxos::store_state(MMonPaxos *m)
   } else {
     dout(10) << "store_state [" << start->first << ".." 
 	     << last_committed << "]" << dendl;
+    t.put(get_name(), "last_committed", last_committed);
+    // we write our first_committed version before we append the message's
+    // transaction because this transaction may be a trim; if so, it will
+    // update the first_committed value, and we must let it clobber our own
+    // in order to obtain an updated state.
+    t.put(get_name(), "first_committed", first_committed);
     // we should apply the state here -- decode every single bufferlist in the
     // map and append the transactions to 't'.
     map<version_t,bufferlist>::iterator it;
@@ -275,8 +281,6 @@ void Paxos::store_state(MMonPaxos *m)
       // apply.
       decode_append_transaction(t, it->second);
     }
-    t.put(get_name(), "last_committed", last_committed);
-    t.put(get_name(), "first_committed", first_committed);
   }
   if (!t.empty()) {
     JSONFormatter f(true);
@@ -285,6 +289,10 @@ void Paxos::store_state(MMonPaxos *m)
     f.flush(*_dout);
     *_dout << dendl;
     get_store()->apply_transaction(t);
+
+    // update the first and last committed in-memory values.
+    first_committed = get_store()->get(get_name(), "first_committed");
+    last_committed = get_store()->get(get_name(), "last_committed");
   }
 }
 
