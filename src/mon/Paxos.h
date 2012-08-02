@@ -1109,19 +1109,15 @@ public:
    * Erase old states from stable storage.
    *
    * @param first The version we are trimming to
-   * @param force If specified, we may even erase the latest stashed version
-   *		  iif @p first is higher than that version.
    */
-  void trim_to(version_t first, bool force = false);
+  void trim_to(version_t first);
   /**
    * Erase old states from stable storage.
    *
    * @param t A transaction
    * @param first The version we are trimming to
-   * @param force If specified, we may even erase the latest stashed version
-   *		  iif @p first is higher than that version.
    */
-  void trim_to(MonitorDBStore::Transaction *t, version_t first, bool force=false);
+  void trim_to(MonitorDBStore::Transaction *t, version_t first);
  
   /**
    * @defgroup Paxos_h_slurping_funcs Slurping-related functions

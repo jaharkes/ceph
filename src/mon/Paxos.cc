@@ -890,7 +890,7 @@ void Paxos::lease_renew_timeout()
  * trim old states
  */
 
-void Paxos::trim_to(MonitorDBStore::Transaction *t, version_t first, bool force)
+void Paxos::trim_to(MonitorDBStore::Transaction *t, version_t first)
 {
   dout(10) << "trim_to " << first << " (was " << first_committed << ")"
 	   << dendl;
@@ -906,11 +906,11 @@ void Paxos::trim_to(MonitorDBStore::Transaction *t, version_t first, bool force)
   t->put(get_name(), "first_committed", first_committed);
 }
 
-void Paxos::trim_to(version_t first, bool force)
+void Paxos::trim_to(version_t first)
 {
   MonitorDBStore::Transaction t;
   
-  trim_to(&t, first, force);
+  trim_to(&t, first);
 
   if (!t.empty()) {
     JSONFormatter f(true);
