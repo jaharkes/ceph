@@ -893,14 +893,12 @@ void Paxos::lease_renew_timeout()
 void Paxos::trim_to(MonitorDBStore::Transaction *t, version_t first, bool force)
 {
   dout(10) << "trim_to " << first << " (was " << first_committed << ")"
-	   << ", latest_stashed " << latest_stashed
 	   << dendl;
 
   if (first_committed >= first)
     return;
 
-  while (first_committed < first &&
-	 (force || first_committed < latest_stashed)) {
+  while (first_committed < first) {
     dout(10) << "trim " << first_committed << dendl;
     t->erase(get_name(), first_committed);
     first_committed++;
@@ -1199,61 +1197,11 @@ bool Paxos::propose_new_value(bufferlist& bl, Context *onfinished)
   return true;
 }
 
-#if 0
-void Paxos::stash_latest(MonitorDBStore::Transaction *t, 
-			 version_t v, bufferlist& bl)
-{
-  if (v == latest_stashed) {
-    dout(10) << "stash_latest v" << v << " already stashed" << dendl;
-    return;  // already stashed.
-  }
-
-  bufferlist final;
-  ::encode(v, final);
-  ::encode(bl, final);
-  
-  dout(10) << "stash_latest v" << v << " len " << bl.length() << dendl;
-  t->put(get_name(), "latest", final);
-
-  latest_stashed = v;
-}
-
-void Paxos::stash_latest(version_t v, bufferlist& bl)
-{
-  MonitorDBStore::Transaction t;
-  stash_latest(&t, v, bl);
-  if (!t.empty())
-    get_store()->apply_transaction(t);
-}
-#endif
-
-version_t Paxos::get_stashed(bufferlist& bl)
-{
-  bufferlist full;
-  if (get_store()->get(get_name(), "latest", full)) {
-    dout(10) << "get_stashed not found" << dendl;
-    return 0;
-  }
-  bufferlist::iterator p = full.begin();
-  version_t v;
-  ::decode(v, p);
-  ::decode(bl, p);
-
-  latest_stashed = v;
-  dout(10) << "get_stashed v" << latest_stashed << " len " << bl.length() << dendl;
-  return latest_stashed;  
-}
-
-
 bool Paxos::is_consistent()
 {
   bool consistent = true;
-//  if (first_committed > 1 && first_committed > latest_stashed)
-//    consistent = false;
   if (first_committed > last_committed)
     consistent = false;
-//  if (latest_stashed > last_committed)
-//    consistent = false;
   if (slurping != 0)
     consistent = false;
 

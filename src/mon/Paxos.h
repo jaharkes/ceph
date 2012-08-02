@@ -336,11 +336,6 @@ private:
    * uncommitted values --, or if we're on a quorum of one.
    */
   list<Context*> waiting_for_readable;
-
-  /**
-   * Latest version written to the store after the latest commit.
-   */
-  version_t latest_stashed;
   /**
    * @}
    */
@@ -991,7 +986,6 @@ public:
 		   accepted_pn(0),
 		   accepted_pn_from(0),
 		   slurping(0),
-		   latest_stashed(0),
 		   num_last(0),
 		   uncommitted_v(0), uncommitted_pn(0),
 		   collect_timeout_event(0),
@@ -1270,31 +1264,6 @@ public:
   void wait_for_commit_front(Context *oncommit) {
     waiting_for_commit.push_front(oncommit);
   }
-  /**
-   * @}
-   */
-
-  /**
-   * @defgroup Paxos_h_stash_funcs State values stashing-related functions
-   *
-   * If the state values are incrementals, it is useful to keep the latest
-   * copy of the complete structure.
-   *
-   * @{
-   */
-  /**
-   * Get the latest stashed version's value
-   *
-   * @param[out] bl the latest stashed version's value
-   * @return the latest stashed version
-   */
-  version_t get_stashed(bufferlist& bl);
-  /**
-   * Get the latest stashed version
-   *
-   * @return the latest stashed version
-   */
-  version_t get_stashed_version() { return latest_stashed; }
   /**
    * @}
    */
