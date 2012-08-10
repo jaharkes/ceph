@@ -765,14 +765,8 @@ void Paxos::finish_proposal()
     return;
   }
 
-  int available_versions = (get_version() - get_first_committed());
-  int maximum_versions =
-    (g_conf->paxos_max_join_drift + g_conf->paxos_trim_tolerance);
-
-  if (!going_to_trim && (available_versions > maximum_versions)) {
-    version_t trim_to_version = get_version() - g_conf->paxos_max_join_drift;
-
-    trim_to(trim_to_version);
+  if (should_trim()) {
+    trim();
   }
 
   if (is_active() && (proposals.size() > 0)) {
@@ -933,6 +927,16 @@ void Paxos::trim_to(version_t first)
     going_to_trim = true;
     queue_proposal(bl, new C_Trimmed(this));
   }
+}
+
+void Paxos::trim_enable() {
+  trim_disabled_version = 0;
+  // We may not be the leader when we reach this function. We sure must
+  // have been the leader at some point, but we may have been demoted and
+  // we really should reset 'trim_disabled_version' if that was the case.
+  // So, make sure we only trim() iff we are the leader.
+  if (mon->is_leader() && should_trim())
+    trim();
 }
 
 /*
