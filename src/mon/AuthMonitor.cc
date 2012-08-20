@@ -138,6 +138,7 @@ void AuthMonitor::update_from_paxos()
     ::decode(max_global_id, p);
     ::decode(mon->key_server, p);
     mon->key_server.set_ver(latest_full);
+    keys_ver = latest_full;
   }
 
   dout(10) << __func__ << " key server version " << mon->key_server.get_ver() << dendl;
