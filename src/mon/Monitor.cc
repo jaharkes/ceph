@@ -1613,7 +1613,8 @@ void Monitor::handle_probe_probe(MMonProbe *m)
   r->name = name;
   r->quorum = quorum;
   monmap->encode(r->monmap_bl, m->get_connection()->get_features());
-  r->paxos_versions[paxos->get_name()] = paxos->get_version();
+  r->paxos_first_version = paxos->get_first_committed();
+  r->paxos_last_version = paxos->get_version();
   messenger->send_message(r, m->get_connection());
 
   // did we discover a peer here?
@@ -1686,26 +1687,23 @@ void Monitor::handle_probe_reply(MMonProbe *m)
     assert(paxos != NULL);
     // do i need to catch up?
     bool ok = true;
-    for (map<string,version_t>::iterator p = m->paxos_versions.begin();
-	 p != m->paxos_versions.end();
-	 ++p) {
-      if (is_synchronizing()) {
-        dout(10) << "We are currently synchronizing, so that will continue."
-		 << " Peer has v " << p->second << dendl;
-        m->put();
-	return;
-      } else if (paxos->get_version() + g_conf->paxos_max_join_drift < p->second) {
-	dout(10) << " peer paxos machine " << p->first << " v " << p->second
-		 << " vs my v " << paxos->get_version()
-		 << " (too far ahead)"
-		 << dendl;
-	ok = false;
-      } else {
-	dout(10) << " peer paxos machine " << p->first << " v " << p->second
-		 << " vs my v " << paxos->get_version()
-		 << " (ok)"
-		 << dendl;
-      }
+    if (is_synchronizing()) {
+      dout(10) << "We are currently synchronizing, so that will continue."
+	<< " Peer has versions [" << m->paxos_first_version
+	<< "," << m->paxos_last_version << "]" << dendl;
+      m->put();
+      return;
+    } else if (paxos->get_version() + g_conf->paxos_max_join_drift < m->paxos_last_version) {
+      dout(10) << " peer paxos version " << m->paxos_last_version
+	       << " vs my version " << paxos->get_version()
+	       << " (too far ahead)"
+	       << dendl;
+      ok = false;
+    } else {
+      dout(10) << " peer paxos version " << m->paxos_last_version
+	<< " vs my version " << paxos->get_version()
+	<< " (ok)"
+	<< dendl;
     }
     if (ok) {
       if (monmap->contains(name) &&
@@ -1722,24 +1720,38 @@ void Monitor::handle_probe_reply(MMonProbe *m)
       sync_start(source);
     }
   } else {
-    // not part of a quorum
-    if (monmap->contains(m->name))
-      outside_quorum.insert(m->name);
-    else
-      dout(10) << " mostly ignoring mon." << m->name << ", not part of monmap" << dendl;
-
-    unsigned need = monmap->size() / 2 + 1;
-    dout(10) << " outside_quorum now " << outside_quorum << ", need " << need << dendl;
-
-    if (outside_quorum.size() >= need) {
-      if (outside_quorum.count(name)) {
-	dout(10) << " that's enough to form a new quorum, calling election" << dendl;
-	start_election();
-      } else {
-	dout(10) << " that's enough to form a new quorum, but it does not include me; waiting" << dendl;
-      }
+    // check if our store is enough up-to-date so that forming a quorum
+    // actually works. Otherwise, we'd be entering a world of pain and
+    // out-of-date states -- this can happen, for instance, if only one
+    // mon is up, and we are starting fresh.
+    entity_inst_t other = m->get_source_inst();
+    if (m->paxos_first_version > paxos->get_version()) {
+      sync_start(other);
+    } else if (paxos->get_first_committed() > m->paxos_last_version) {
+      dout(10) << __func__ << " waiting for " << other
+	<< " to sync with us (our fc: "
+	<< paxos->get_first_committed() << "; theirs lc: "
+	<< m->paxos_last_version << ")" << dendl;
     } else {
-      dout(10) << " that's not yet enough for a new quorum, waiting" << dendl;
+      // not part of a quorum
+      if (monmap->contains(m->name))
+	outside_quorum.insert(m->name);
+      else
+	dout(10) << " mostly ignoring mon." << m->name << ", not part of monmap" << dendl;
+
+      unsigned need = monmap->size() / 2 + 1;
+      dout(10) << " outside_quorum now " << outside_quorum << ", need " << need << dendl;
+
+      if (outside_quorum.size() >= need) {
+	if (outside_quorum.count(name)) {
+	  dout(10) << " that's enough to form a new quorum, calling election" << dendl;
+	  start_election();
+	} else {
+	  dout(10) << " that's enough to form a new quorum, but it does not include me; waiting" << dendl;
+	}
+      } else {
+	dout(10) << " that's not yet enough for a new quorum, waiting" << dendl;
+      }
     }
   }
   m->put();
