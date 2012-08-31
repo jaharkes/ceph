@@ -31,42 +31,6 @@ static ostream& _prefix(std::ostream *_dout, Monitor *mon, Paxos *paxos, string 
 		<< ").paxosservice(" << service_name << ") ";
 }
 
-bool PaxosService::is_readable(version_t ver)
-{
-  if (ver > get_last_committed()) {
-    dout(20) << __func__ << " v" << ver
-	     << " > last committed v" << get_last_committed() << dendl;
-    return false;
-  }
-
-  if (!mon->is_peon() && !mon->is_leader()) {
-    dout(20) << __func__ << " peon = " << mon->is_peon()
-	     << "; leader = " << mon->is_leader() << dendl;
-    return false;
-  }
-
-  if (is_proposing() || paxos->is_recovering()) {
-    dout(20) << __func__ << " proposing = " << is_proposing()
-	     << "; recovering = " << paxos->is_recovering() << dendl;
-    if (is_proposing())
-      dout(20) << __func__ << " paxos state: active = " << paxos->is_active()
-	       << "; updating = " << paxos->is_updating() << dendl;
-    return false;
-  }
-
-  if (get_last_committed() <= 0) {
-    dout(20) << __func__ << " last committed <= 0" << dendl;
-    return false;
-  }
-
-  if ((mon->get_quorum().size() != 1) && !paxos->is_lease_valid()) {
-    dout(20) << __func__ << " quorum = " << mon->get_quorum().size()
-	     << "; valid lease = " << paxos->is_lease_valid() << dendl;
-    return false;
-  }
-  return true;
-}
-
 bool PaxosService::dispatch(PaxosServiceMessage *m)
 {
   dout(10) << "dispatch " << *m << " from " << m->get_orig_source_inst() << dendl;
@@ -332,26 +296,5 @@ void PaxosService::encode_trim(MonitorDBStore::Transaction *t)
     first_committed++;
   }
   put_first_committed(t, first_committed);
-}
-
-PaxosService::C_Active::C_Active(PaxosService *s) : svc(s)
-{
-#undef dout_prefix
-#define dout_prefix _prefix(_dout, s->mon, s->paxos, s->service_name)
-  dout(10) << __func__ << " Creating active callback for " << s->get_service_name() << dendl;
-#undef dout_prefix
-#define dout_prefix _prefix(_dout, mon, paxos, service_name)
-}
-
-void PaxosService::C_Active::finish(int r)
-{
-  if (r >= 0) {
-#undef dout_prefix
-#define dout_prefix _prefix(_dout, svc->mon, svc->paxos, svc->service_name)
-    dout(10) << __func__ << " Going active for " << svc->get_service_name() << dendl;
-#undef dout_prefix
-#define dout_prefix _prefix(_dout, mon, paxos, service_name)
-    svc->_active();
-  }
 }
 

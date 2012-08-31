@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -124,11 +124,11 @@ protected:
   class C_Active : public Context {
     PaxosService *svc;
   public:
-    C_Active(PaxosService *s);// : svc(s) {}
-    void finish(int r);/* {
-      if (r >= 0) 
+    C_Active(PaxosService *s) : svc(s) {}
+    void finish(int r) {
+      if (r >= 0)
 	svc->_active();
-    }*/
+    }
   };
 
   /**
@@ -147,20 +147,22 @@ protected:
     }
   };
 
+  /**
+   * Callback class used to mark us as active once a proposal finishes going
+   * through Paxos.
+   *
+   * We should wake people up *only* *after* we inform the service we
+   * just went active. And we should wake people up only once we finish
+   * going active. This is why we first go active, avoiding to wake up the
+   * wrong people at the wrong time, such as waking up a C_RetryMessage
+   * before waking up a C_Active, thus ending up without a pending value.
+   */
   class C_Committed : public Context {
     PaxosService *ps;
   public:
     C_Committed(PaxosService *p) : ps(p) { }
     void finish(int r) {
       ps->proposing.set(0);
-      /* We should wake people up *only* *after* we inform the service we
-       * just went active. And we should wake people up only once we finish
-       * going active. This way we avoid waking up the wrong people at the
-       * wrong time, such as waking up a C_RetryMessage before waking up a
-       * C_Active, thus ending up without a pending value.
-       *
-      ps->wakeup_proposing_waiters();
-       */
       ps->_active();
     }
   };
@@ -418,11 +420,19 @@ public:
    */
 
   /**
+   * Callback list to be used whenever we are running a proposal through
+   * Paxos. These callbacks will be awaken whenever the said proposal
+   * finishes.
    */
   list<Context*> waiting_for_finished_proposal;
 
  public:
 
+  /**
+   * Check if we are proposing a value through Paxos
+   *
+   * @returns true if we are proposing; false otherwise.
+   */
   bool is_proposing() {
     return ((int) proposing.read() == 1);
   }
@@ -440,54 +450,43 @@ public:
   }
 
   /**
-   * TODO: FIXME: Most of this is no longer valid. Rework it. Seriously. I just
-   * TODO: FIXME: don't have the time right now.
-   *
    * Check if we are readable.
    *
-   * The services implementing us used to rely on this function to check if
-   * Paxos was readable, back when we had a Paxos instance for each service.
-   * Now, we only have a single Paxos instance, shared by all the services.
+   * We consider that a given version @p ver is readable if:
    *
-   * Since each service longer have their own private Paxos, they can no
-   * longer assume each Paxos version as theirs, thus we cannot make this
-   * function a plain wrapper for the Paxos::is_readable as is. Currently,
-   * Paxos versions are Paxos'; our versions are ours'. There's no more
-   * in-breeding here.
-   *
-   * So, since we cannot infer which Paxos version the version @p ver have been
-   * "mapped" to (i.e., which Paxos version its proposal turned out to be), we
-   * are forced to make some new rules, although highly based on Paxos'.
-   *
-   * Since "being readable" is a state tightly-knit with the Paxos state, we
-   * are going to say that a given version @p ver is readable iif:
-   *
-   *  - ver <= last_committed (same as in Paxos, but this is *our*
-   *  last_committed, instead of Paxos' last_committed); and
-   *  - Paxos::is_readable(0) returns true.
-   *
-   * We are relying on passing '0' as an argument to Paxos::is_readable because
-   * we know it will then perform all the checks we are really interested in.
-   * Feel free to head out to Paxos.h for further explanation on this function.
+   *  - it exists (i.e., is lower than the last committed version);
+   *  - we have at least one committed version (i.e., last committed version
+   *    is greater than zero);
+   *  - our monitor is a member of the cluster (either a peon or the leader);
+   *  - we are not proposing a new version;
+   *  - the Paxos is not recovering;
+   *  - we either belong to a quorum and have a valid lease, or we belong to
+   *    a quorum of one.
    *
    * @param ver The version we want to check if is readable
    * @returns true if it is readable; false otherwise
    */
-  bool is_readable(version_t ver = 0);/* {
-    if (ver > get_last_committed())
+  bool is_readable(version_t ver = 0) {
+    if ((ver > get_last_committed())
+	|| ((!mon->is_peon() && !mon->is_leader()))
+	|| (is_proposing() || paxos->is_recovering())
+	|| (get_last_committed() <= 0)
+	|| ((mon->get_quorum().size() != 1) && !paxos->is_lease_valid())) {
       return false;
-
-    return ((mon->is_peon() || mon->is_leader())
-      && (!is_proposing() && !paxos->is_recovering())
-      && (get_last_committed() > 0)
-      && ((mon->get_quorum().size() == 1) || paxos->is_lease_valid()));
-  }*/
+    }
+    return true;
+  }
 
   /**
    * Check if we are writeable.
    *
-   * @note This function is a wrapper for Paxos::is_writeable
-   ;*
+   * We consider to be writeable iff:
+   *
+   *  - we are not proposing a new version;
+   *  - our monitor is the leader;
+   *  - we have a valid lease;
+   *  - Paxos is not boostrapping.
+   *
    * @returns true if writeable; false otherwise
    */
   bool is_writeable() {
@@ -495,22 +494,37 @@ public:
 	&& paxos->is_lease_valid() && !paxos->is_bootstrapping());
   }
 
+  /**
+   * Wait for a proposal to finish.
+   *
+   * Add a callback to be awaken whenever our current proposal finishes being
+   * proposed through Paxos.
+   *
+   * @param c The callback to be awaken once the proposal is finished.
+   */
   void wait_for_finished_proposal(Context *c) {
     waiting_for_finished_proposal.push_back(c);
   }
 
+  /**
+   * Wait for us to become active
+   *
+   * @param c The callback to be awaken once we become active.
+   */
   void wait_for_active(Context *c) {
-    if (paxos->is_bootstrapping()) {
+    if (paxos->is_bootstrapping() || !is_proposing()) {
       paxos->wait_for_active(c);
       return;
     }
-
-    if (is_proposing())
-      wait_for_finished_proposal(c);
-    else
-      paxos->wait_for_active(c);
+    wait_for_finished_proposal(c);
   }
 
+  /**
+   * Wait for us to become readable
+   *
+   * @param c The callback to be awaken once we become active.
+   * @param ver The version we want to wait on.
+   */
   void wait_for_readable(Context *c, version_t ver = 0) {
     /* This is somewhat of a hack. We only do check if a version is readable on
      * PaxosService::dispatch(), but, nonetheless, we must make sure that if that
@@ -525,18 +539,23 @@ public:
       paxos->wait_for_readable(c);
   }
 
+  /**
+   * Wait for us to become writeable
+   *
+   * @param c The callback to be awaken once we become writeable.
+   */
   void wait_for_writeable(Context *c) {
-    if (paxos->is_bootstrapping()) {
+    if (paxos->is_bootstrapping() || !is_proposing()) {
       paxos->wait_for_writeable(c);
       return;
     }
 
-    if (is_proposing())
-      wait_for_finished_proposal(c);
-    else
-      paxos->wait_for_writeable(c);
+    wait_for_finished_proposal(c);
   }
 
+  /**
+   * Wakeup all the callbacks waiting for the proposal to be finished
+   */
   void wakeup_proposing_waiters();
 
   /**
