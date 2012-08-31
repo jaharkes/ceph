@@ -145,7 +145,6 @@ public:
 private:
   enum {
     STATE_PROBING = 1,
-    STATE_SLURPING,
     STATE_SYNCHRONIZING,
     STATE_ELECTING,
     STATE_LEADER,
@@ -158,7 +157,6 @@ public:
   static const char *get_state_name(int s) {
     switch (s) {
     case STATE_PROBING: return "probing";
-    case STATE_SLURPING: return "slurping";
     case STATE_SYNCHRONIZING: return "synchronizing";
     case STATE_ELECTING: return "electing";
     case STATE_LEADER: return "leader";
@@ -174,7 +172,6 @@ public:
   }
 
   bool is_probing() const { return state == STATE_PROBING; }
-  bool is_slurping() const { return state == STATE_SLURPING; }
   bool is_synchronizing() const { return state == STATE_SYNCHRONIZING; }
   bool is_electing() const { return state == STATE_ELECTING; }
   bool is_leader() const { return state == STATE_LEADER; }
@@ -195,8 +192,6 @@ private:
   uint64_t quorum_features;  ///< intersection of quorum member feature bits
 
   set<string> outside_quorum;
-  entity_inst_t slurp_source;
-  map<string,version_t> slurp_versions;
 
   /**
    * @defgroup Synchronization
@@ -1120,7 +1115,7 @@ private:
    */
 
 
-  Context *probe_timeout_event;  // for probing and slurping states
+  Context *probe_timeout_event;  // for probing
 
   struct C_ProbeTimeout : public Context {
     Monitor *mon;
@@ -1134,9 +1129,6 @@ private:
   void cancel_probe_timeout();
   void probe_timeout(int r);
 
-  void slurp();
-
- 
 public:
   epoch_t get_epoch();
   int get_leader() { return leader; }
@@ -1255,20 +1247,6 @@ public:
    */
   void handle_probe_probe(MMonProbe *m);
   void handle_probe_reply(MMonProbe *m);
-  void handle_probe_slurp(MMonProbe *m);
-  void handle_probe_slurp_latest(MMonProbe *m);
-  void handle_probe_data(MMonProbe *m);
-  /**
-   * Given an MMonProbe and associated Paxos machine, create a reply,
-   * fill it with the missing Paxos states and current commit pointers
-   *
-   * @param m The incoming MMonProbe. We use this to determine the range
-   * of paxos states to include in the reply.
-   * @param pax The Paxos state machine which m is associated with.
-   *
-   * @returns A new MMonProbe message, initialized as OP_DATA, and filled
-   * with the necessary Paxos states. */
-  MMonProbe *fill_probe_data(MMonProbe *m, Paxos *pax);
 
   // request routing
   struct RoutedRequest {

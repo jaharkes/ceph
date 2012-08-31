@@ -489,7 +489,7 @@ void Monitor::init_paxos()
   for (int i = 0; i < PAXOS_NUM; ++i) {
     if (paxos->is_consistent()) {
       paxos_service[i]->update_from_paxos();
-    } // else we don't do anything; handle_probe_reply will detect it's slurping
+    }
   }
 }
 
@@ -1554,7 +1554,7 @@ void Monitor::reset_probe_timeout()
 {
   cancel_probe_timeout();
   probe_timeout_event = new C_ProbeTimeout(this);
-  double t = is_probing() ? g_conf->mon_probe_timeout : g_conf->mon_slurp_timeout;
+  double t = g_conf->mon_probe_timeout;
   timer.add_event_after(t, probe_timeout_event);
   dout(10) << "reset_probe_timeout " << probe_timeout_event << " after " << t << " seconds" << dendl;
 }
@@ -1585,18 +1585,6 @@ void Monitor::handle_probe(MMonProbe *m)
 
   case MMonProbe::OP_REPLY:
     handle_probe_reply(m);
-    break;
-
-  case MMonProbe::OP_SLURP:
-    handle_probe_slurp(m);
-    break;
-
-  case MMonProbe::OP_SLURP_LATEST:
-    handle_probe_slurp_latest(m);
-    break;
-
-  case MMonProbe::OP_DATA:
-    handle_probe_data(m);
     break;
 
   default:
@@ -1756,179 +1744,6 @@ void Monitor::handle_probe_reply(MMonProbe *m)
     }
   }
   m->put();
-}
-
-/*
- * The whole slurp process is currently a bit of a hack.  Given the
- * current storage model, we should be sharing code with Paxos to make
- * sure we copy the right content.  But that model sucks and will
- * hopefully soon change, and it's less work to kludge around it here
- * than it is to make the current model clean.
- *
- * So: more or less duplicate the work of resyncing each paxos state
- * machine here.  And move the monitor storage refactor stuff up the
- * todo list.
- *
- */
-
-void Monitor::slurp()
-{
-  dout(10) << "slurp " << slurp_source << " " << slurp_versions << dendl;
-
-  /*
-  reset_probe_timeout();
-
-  state = STATE_SLURPING;
-
-  map<string,version_t>::iterator p = slurp_versions.begin();
-  while (p != slurp_versions.end()) {
-    Paxos *pax = get_paxos_by_name(p->first);
-    if (!pax) {
-      p++;
-      continue;
-    }
-
-    dout(10) << " " << p->first << " v " << p->second << " vs my " << pax->get_version() << dendl;
-    if (p->second > pax->get_version() ||
-	pax->get_stashed_version() > pax->get_version()) {
-      if (!pax->is_slurping()) {
-        pax->start_slurping();
-      }
-      MMonProbe *m = new MMonProbe(monmap->fsid, MMonProbe::OP_SLURP, name, has_ever_joined);
-      m->machine_name = p->first;
-      m->oldest_version = pax->get_first_committed();
-      m->newest_version = pax->get_version();
-      messenger->send_message(m, slurp_source);
-      return;
-    }
-
-    // latest?
-    if (pax->get_first_committed() > 1 &&   // don't need it!
-	pax->get_stashed_version() < pax->get_first_committed()) {
-      if (!pax->is_slurping()) {
-        pax->start_slurping();
-      }
-      MMonProbe *m = new MMonProbe(monmap->fsid, MMonProbe::OP_SLURP_LATEST, name, has_ever_joined);
-      m->machine_name = p->first;
-      m->oldest_version = pax->get_first_committed();
-      m->newest_version = pax->get_version();
-      messenger->send_message(m, slurp_source);
-      return;
-    }
-
-    PaxosService *paxs = get_paxos_service_by_name(p->first);
-    assert(paxs);
-    paxs->update_from_paxos();
-
-    pax->end_slurping();
-
-    slurp_versions.erase(p++);
-  }
-
-  dout(10) << "done slurping" << dendl;
-  bootstrap();
-  */
-}
-
-MMonProbe *Monitor::fill_probe_data(MMonProbe *m, Paxos *pax)
-{
-  dout(10) << __func__ << *m << dendl;
-  /*
-  MMonProbe *r = new MMonProbe(monmap->fsid, MMonProbe::OP_DATA, name, has_ever_joined);
-  r->machine_name = m->machine_name;
-  r->oldest_version = pax->get_first_committed();
-  r->newest_version = pax->get_version();
-
-  version_t v = MAX(pax->get_first_committed(), m->newest_version + 1);
-  int len = 0;
-  for (; v <= pax->get_version(); v++) {
-    len += store->get(m->machine_name.c_str(), v, 
-		       r->paxos_values[m->machine_name][v]);
-
-    for (list<string>::iterator p = pax->extra_state_dirs.begin();
-         p != pax->extra_state_dirs.end();
-         ++p) {
-      len += store->get(p->c_str(), v, r->paxos_values[*p][v]);
-    }
-    if (len >= g_conf->mon_slurp_bytes)
-      break;
-  }
-
-  return r;
-  */
-  return NULL;
-}
-
-void Monitor::handle_probe_slurp(MMonProbe *m)
-{
-  dout(10) << "handle_probe_slurp " << *m << dendl;
-  /*
-  Paxos *pax = get_paxos_by_name(m->machine_name);
-  assert(pax);
-
-  MMonProbe *r = fill_probe_data(m, pax);
-  messenger->send_message(r, m->get_connection());
-  */
-  m->put();
-}
-
-void Monitor::handle_probe_slurp_latest(MMonProbe *m)
-{
-  dout(10) << "handle_probe_slurp_latest " << *m << dendl;
-  /*
-  Paxos *pax = get_paxos_by_name(m->machine_name);
-  assert(pax);
-
-  MMonProbe *r = fill_probe_data(m, pax);
-  r->latest_version = pax->get_stashed(r->latest_value);
-
-  messenger->send_message(r, m->get_connection());
-  */
-  m->put();
-}
-
-void Monitor::handle_probe_data(MMonProbe *m)
-{
-  dout(10) << "handle_probe_data " << *m << dendl;
-  /*
-  Paxos *pax = get_paxos_by_name(m->machine_name);
-  assert(pax);
-
-  // trim old cruft?
-  if (m->oldest_version > pax->get_first_committed())
-    pax->trim_to(m->oldest_version, true);
-
-  // note new latest version?
-  if (slurp_versions.count(m->machine_name))
-    slurp_versions[m->machine_name] = m->newest_version;
-
-  // store any new stuff
-  if (m->paxos_values.size()) {
-    map<string, map<version_t,bufferlist> >::iterator p;
-   
-    // bundle everything on a single transaction
-    MonitorDBStore::Transaction t;
-    
-    for (p = m->paxos_values.begin(); p != m->paxos_values.end(); ++p) {
-      store->put(&t, p->first.c_str(), p->second.begin(), p->second.end());
-    }
-
-    pax->last_committed = m->paxos_values.begin()->second.rbegin()->first;
-    store->put(&t, m->machine_name.c_str(), 
-		"last_committed", pax->last_committed);
-
-    store->apply_transaction(t);
-  }
-
-  // latest?
-  if (m->latest_version) {
-    pax->stash_latest(m->latest_version, m->latest_value);
-  }
-
-  m->put();
-
-  slurp();
-  */
 }
 
 void Monitor::start_election()
