@@ -1092,8 +1092,10 @@ void Monitor::sync_send_chunks(SyncEntity sync)
 
 
 }
+// end of synchronization provider
 
-// end of synchronization provider)
+// start of synchronization requester
+
 void Monitor::sync_requester_abort()
 {
   dout(10) << __func__;
@@ -1131,6 +1133,7 @@ void Monitor::sync_requester_abort()
 
   bootstrap();
 }
+
 /**
  * Start Sync process
  *
@@ -1305,7 +1308,6 @@ void Monitor::handle_sync_heartbeat_reply(MMonSync *m)
 			   g_conf->mon_sync_heartbeat_interval);
 }
 
-
 void Monitor::handle_sync_chunk(MMonSync *m)
 {
   dout(10) << __func__ << " " << *m << dendl;
@@ -1335,7 +1337,6 @@ void Monitor::handle_sync_chunk(MMonSync *m)
   MonitorDBStore::Transaction tx;
   tx.append_from_encoded(m->chunk_bl);
 
-//  sync_provider->synchronizer.queue(m->chunk_bl);
   sync_provider->set_timeout(new C_SyncTimeout(this, sync_provider->entity),
 			     g_conf->mon_sync_timeout);
   sync_provider->last_received_key = m->last_key;

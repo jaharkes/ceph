@@ -617,16 +617,6 @@ private:
 	  synchronizer = mon->store->get_synchronizer(prefix);
 	}
       }
-#if 0
-      if (sync_state == STATE_WHOLE) {
-	if (synchronizer->has_next_chunk())
-	  return;
-
-	sync_state = STATE_PAXOS;
-	string prefix("paxos");
-	synchronizer = mon->store->get_synchronizer(prefix);
-      }
-#endif
     }
 
     /* For debug purposes only */
