@@ -364,17 +364,6 @@ void Paxos::handle_last(MMonPaxos *last)
       peer_last_committed.clear();
 
       // almost...
-      // NOTE: we used to go ACTIVE here, and then go back to UPDATING on
-      //       begin(). Those days are over now. We go ACTIVE on the 'else'
-      //       branch, and we go WARMING_UP on the 'if' branch, so we
-      //state = STATE_ACTIVE;
-
-      /*
-       * We get to the handle_last() only during recovery. And during recovery
-       * there are no services proposing values; therefore, there is no
-       * proposal; thus do not finish something that does not exist!
-       */
-      //finish_proposal();
 
       // did we learn an old value?
       if (uncommitted_v == last_committed+1 &&
