@@ -1163,7 +1163,7 @@ void Monitor::sync_start(entity_inst_t &other)
   cancel_probe_timeout();
 
   dout(10) << __func__ << " entity( " << other << " )" << dendl;
-  if (state == STATE_SYNCHRONIZING) {
+  if ((state == STATE_SYNCHRONIZING) && (sync_role == SYNC_ROLE_REQUESTER)) {
     dout(1) << __func__ << " already synchronizing; drop it" << dendl;
     return;
   }
@@ -1282,6 +1282,9 @@ void Monitor::handle_sync_start_reply(MMonSync *m)
   sync_leader->cancel_timeout();
   
   if (m->flags & MMonSync::FLAG_RETRY) {
+    dout(10) << __func__ << " retrying sync at a later time" << dendl;
+    sync_role = SYNC_ROLE_NONE;
+    sync_state = SYNC_STATE_NONE;
     sync_leader->set_timeout(new C_SyncStartRetry(this, sync_leader->entity),
 			     g_conf->mon_sync_backoff_timeout);
     return;
