@@ -1922,7 +1922,12 @@ void Monitor::_sync_status(ostream& ss)
       for (map<entity_inst_t,Context*>::iterator it = trim_timeouts.begin();
 	   it != trim_timeouts.end();
 	   ++it) {
-	jf.dump_stream("mon") << (*it).first;
+	entity_inst_t e = (*it).first;
+	jf.dump_stream("mon") << e;
+	int s = -1;
+	if (sync_entities_states.count(e))
+	  s = sync_entities_states[e];
+	jf.dump_stream("sync_state") << get_sync_state_name(s);
       }
     }
     jf.close_section();
@@ -1933,9 +1938,15 @@ void Monitor::_sync_status(ostream& ss)
     for (map<entity_inst_t,SyncEntity>::iterator it = sync_entities.begin();
 	 it != sync_entities.end();
 	 ++it) {
+      entity_inst_t e = (*it).first;
       jf.open_object_section("mon");
-      jf.dump_stream("addr") << (*it).first;
+      jf.dump_stream("addr") << e;
       jf.dump_string("state", (*it).second->get_state());
+      int s = -1;
+      if (sync_entities_states.count(e))
+	  s = sync_entities_states[e];
+      jf.dump_stream("sync_state") << get_sync_state_name(s);
+
       jf.close_section();
     }
     jf.close_section();

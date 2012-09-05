@@ -1010,6 +1010,15 @@ private:
   /**
    * @} // Synchronization Requester-specific
    */
+  const string get_sync_state_name(int s) const {
+    switch (s) {
+    case SYNC_STATE_NONE: return "none";
+    case SYNC_STATE_START: return "start";
+    case SYNC_STATE_CHUNKS: return "chunks";
+    case SYNC_STATE_STOP: return "stop";
+    }
+    return "???";
+  }
   /**
    * Obtain a string describing the current Sync State.
    *
@@ -1032,12 +1041,7 @@ private:
       sn.append(" requester");
 
     sn.append(" state ");
-    switch (sync_state) {
-    case SYNC_STATE_NONE: sn.append("none"); break;
-    case SYNC_STATE_START: sn.append("start"); break;
-    case SYNC_STATE_CHUNKS: sn.append("chunks"); break;
-    case SYNC_STATE_STOP: sn.append("stop"); break;
-    }
+    sn.append(get_sync_state_name(sync_state));
 
     sn.append(" )");
 
