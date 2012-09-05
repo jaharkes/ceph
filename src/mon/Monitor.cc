@@ -891,6 +891,12 @@ void Monitor::handle_sync_finish(MMonSync *m)
   if (!trim_timeouts.count(other) || !sync_entities_states.count(other)
       || (sync_entities_states[other] != SYNC_STATE_START)) {
     dout(1) << __func__ << " ignored stray message from " << other << dendl;
+    if (!trim_timeouts.count(other))
+      dout(1) << __func__ << "  not on trim_timeouts" << dendl;
+    if (!sync_entities_states.count(other))
+      dout(1) << __func__ << "  not on sync_entities_states" << dendl;
+    else if (sync_entities_states[other] != SYNC_STATE_START)
+      dout(1) << __func__ << "  state " << sync_entities_states[other] << dendl;
     m->put();
     return;
   }
