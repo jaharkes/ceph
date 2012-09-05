@@ -847,25 +847,23 @@ void Monitor::sync_finish(entity_inst_t &entity, bool abort)
 
   Mutex::Locker l(trim_lock);
 
-  if (trim_timeouts.count(entity) > 0) {
-    if (trim_timeouts[entity] != NULL)
-      timer.cancel_event(trim_timeouts[entity]);
-
-    trim_timeouts.erase(entity);
-    sync_entities_states.erase(entity);
-
-    if (abort) {
-      MMonSync *m = new MMonSync(MMonSync::OP_ABORT);
-      assert(g_conf->mon_sync_leader_kill_at != 5);
-      messenger->send_message(m, entity);
-      assert(g_conf->mon_sync_leader_kill_at != 6);
-    }
-
-    // we may have been the leader, but by now we may no longer be.
-    // this can happen when the we sync'ed a monitor that became the
-    // leader, or that same monitor simply came back to life and got
-    // elected as the new leader.
+  if (!trim_timeouts.count(entity)) {
+    dout(1) << __func__ << " we know of no sync effort from "
+	    << entity << " -- ignore it." << dendl;
     return;
+  }
+
+  if (trim_timeouts[entity] != NULL)
+    timer.cancel_event(trim_timeouts[entity]);
+
+  trim_timeouts.erase(entity);
+  sync_entities_states.erase(entity);
+
+  if (abort) {
+    MMonSync *m = new MMonSync(MMonSync::OP_ABORT);
+    assert(g_conf->mon_sync_leader_kill_at != 5);
+    messenger->send_message(m, entity);
+    assert(g_conf->mon_sync_leader_kill_at != 6);
   }
 
   if (trim_timeouts.size() > 0)
@@ -874,6 +872,10 @@ void Monitor::sync_finish(entity_inst_t &entity, bool abort)
   dout(10) << __func__ << " no longer a sync leader" << dendl;
   sync_role &= ~SYNC_ROLE_LEADER;
 
+  // we may have been the leader, but by now we may no longer be.
+  // this can happen when the we sync'ed a monitor that became the
+  // leader, or that same monitor simply came back to life and got
+  // elected as the new leader.
   if (is_leader() && paxos->is_trim_disabled()) {
     trim_enable_timer = new C_TrimEnable(this);
     timer.add_event_after(30.0, trim_enable_timer);
