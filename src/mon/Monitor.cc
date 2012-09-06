@@ -1276,8 +1276,7 @@ void Monitor::handle_sync_start_reply(MMonSync *m)
     // state if that is not the case. Therefore, just drop it and let the
     // timeouts figure it out. Eventually.
     dout(1) << __func__ << " stray message -- drop it." << dendl;
-    m->put();
-    return;
+    goto out;
   }
 
   assert(state == STATE_SYNCHRONIZING);
@@ -1294,7 +1293,7 @@ void Monitor::handle_sync_start_reply(MMonSync *m)
     sync_state = SYNC_STATE_NONE;
     sync_leader->set_timeout(new C_SyncStartRetry(this, sync_leader->entity),
 			     g_conf->mon_sync_backoff_timeout);
-    return;
+    goto out;
   }
 
   sync_leader->set_timeout(new C_HeartbeatTimeout(this),
@@ -1305,6 +1304,8 @@ void Monitor::handle_sync_start_reply(MMonSync *m)
   assert(g_conf->mon_sync_requester_kill_at != 3);
 
   sync_start_chunks(sync_provider);
+out:
+  m->put();
 }
 
 void Monitor::handle_sync_heartbeat_reply(MMonSync *m)
