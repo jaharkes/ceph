@@ -832,7 +832,7 @@ private:
     { }
 
     void finish(int r) {
-      mon->sync_start(entity);
+      mon->bootstrap();
     }
   };
   /**
