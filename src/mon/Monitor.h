@@ -298,6 +298,7 @@ private:
    * Paxos trim be enabled.
    */
   map<entity_inst_t, Context*> trim_timeouts;
+  map<entity_inst_t, uint8_t> trim_entities_states;
   /**
    * Map associating monitors to a sync state.
    *

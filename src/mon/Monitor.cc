@@ -719,6 +719,7 @@ void Monitor::reset_sync()
   }
 
   sync_entities_states.clear();
+  trim_entities_states.clear();
 
   sync_leader.reset();
   sync_provider.reset();
@@ -769,7 +770,7 @@ void Monitor::handle_sync_start(MMonSync *m)
     dout(1) << __func__ << " sync session already in progress for " << other
 	    << dendl;
 
-    if (sync_entities_states[other] != SYNC_STATE_NONE) {
+    if (trim_entities_states[other] != SYNC_STATE_NONE) {
       dout(1) << __func__ << "    ignore stray message" << dendl;
       m->put();
       return;
@@ -781,7 +782,7 @@ void Monitor::handle_sync_start(MMonSync *m)
     if (trim_timeouts[other])
       timer.cancel_event(trim_timeouts[other]);
     trim_timeouts.erase(other);
-    sync_entities_states.erase(other);
+    trim_entities_states.erase(other);
   }
 
   MMonSync *msg = new MMonSync(MMonSync::OP_START_REPLY);
@@ -793,7 +794,7 @@ void Monitor::handle_sync_start(MMonSync *m)
     trim_timeouts.insert(make_pair(other, new C_TrimTimeout(this, other)));
     timer.add_event_after(g_conf->mon_sync_trim_timeout, trim_timeouts[other]);
 
-    sync_entities_states[other] = SYNC_STATE_START;
+    trim_entities_states[other] = SYNC_STATE_START;
     sync_role |= SYNC_ROLE_LEADER;
 
     paxos->trim_disable();
@@ -810,8 +811,8 @@ void Monitor::handle_sync_heartbeat(MMonSync *m)
 
   entity_inst_t other = m->get_source_inst();
   if (!(sync_role & SYNC_ROLE_LEADER)
-      || !sync_entities_states.count(other)
-      || (sync_entities_states[other] != SYNC_STATE_START)) {
+      || !trim_entities_states.count(other)
+      || (trim_entities_states[other] != SYNC_STATE_START)) {
     // stray message; ignore.
     dout(1) << __func__ << " ignored stray message " << *m << dendl;
     m->put();
@@ -857,7 +858,7 @@ void Monitor::sync_finish(entity_inst_t &entity, bool abort)
     timer.cancel_event(trim_timeouts[entity]);
 
   trim_timeouts.erase(entity);
-  sync_entities_states.erase(entity);
+  trim_entities_states.erase(entity);
 
   if (abort) {
     MMonSync *m = new MMonSync(MMonSync::OP_ABORT);
@@ -888,15 +889,15 @@ void Monitor::handle_sync_finish(MMonSync *m)
 
   entity_inst_t other = m->get_source_inst();
 
-  if (!trim_timeouts.count(other) || !sync_entities_states.count(other)
-      || (sync_entities_states[other] != SYNC_STATE_START)) {
+  if (!trim_timeouts.count(other) || !trim_entities_states.count(other)
+      || (trim_entities_states[other] != SYNC_STATE_START)) {
     dout(1) << __func__ << " ignored stray message from " << other << dendl;
     if (!trim_timeouts.count(other))
       dout(1) << __func__ << "  not on trim_timeouts" << dendl;
-    if (!sync_entities_states.count(other))
-      dout(1) << __func__ << "  not on sync_entities_states" << dendl;
-    else if (sync_entities_states[other] != SYNC_STATE_START)
-      dout(1) << __func__ << "  state " << sync_entities_states[other] << dendl;
+    if (!trim_entities_states.count(other))
+      dout(1) << __func__ << "  not on trim_entities_states" << dendl;
+    else if (trim_entities_states[other] != SYNC_STATE_START)
+      dout(1) << __func__ << "  state " << trim_entities_states[other] << dendl;
     m->put();
     return;
   }
@@ -1931,8 +1932,8 @@ void Monitor::_sync_status(ostream& ss)
 	entity_inst_t e = (*it).first;
 	jf.dump_stream("mon") << e;
 	int s = -1;
-	if (sync_entities_states.count(e))
-	  s = sync_entities_states[e];
+	if (trim_entities_states.count(e))
+	  s = trim_entities_states[e];
 	jf.dump_stream("sync_state") << get_sync_state_name(s);
       }
     }
