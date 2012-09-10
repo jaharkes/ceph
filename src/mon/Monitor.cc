@@ -1989,7 +1989,12 @@ void Monitor::_sync_force(ostream& ss)
   tx.put("mon_sync", "force_sync", 1);
   store->apply_transaction(tx);
 
-  ss << "forcing store sync the next time the monitor starts";
+  JSONFormatter jf(true);
+  jf.open_object_section("sync_force");
+  jf.dump_int("ret", 0);
+  jf.dump_stream("msg") << "forcing store sync the next time the monitor starts";
+  jf.close_section();
+  jf.flush(ss);
 }
 
 void Monitor::_quorum_status(ostream& ss)
