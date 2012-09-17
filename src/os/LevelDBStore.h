@@ -25,7 +25,7 @@ public:
   LevelDBStore(const string &path) : path(path) {}
 
   /// Opens underlying db
-  int init(ostream &out);
+  int init(ostream &out, bool create_if_missing = true);
 
   class LevelDBTransactionImpl : public KeyValueDB::TransactionImpl {
   public:
