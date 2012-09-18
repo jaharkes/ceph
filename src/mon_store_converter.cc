@@ -59,8 +59,8 @@ class MonitorStoreConverter {
     return 0;
   }
 
-  int match() {
-    return 0;
+  bool match() {
+    return true;
   }
 
  private:
@@ -193,19 +193,7 @@ int main(int argc, const char *argv[])
     return 1;
   }
   string store(args[0]);
-  string new_store;
-  {
-    string::const_reverse_iterator rit;
-    int pos = 0;
-    for (rit = store.rbegin(); rit != store.rend(); ++rit, ++pos) {
-      if (*rit != '/')
-	break;
-    }
-    ostringstream os;
-    os << store.substr(0, store.size()-pos) << "/store.db";
-    new_store = os.str();
-  }
-
+  string new_store(store);
   MonitorStoreConverter converter(store, new_store);
   assert(!converter.convert());
   assert(converter.match());
