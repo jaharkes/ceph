@@ -17,6 +17,11 @@
 #include <set>
 #include <boost/scoped_ptr.hpp>
 
+#include "common/ceph_argparse.h"
+#include "global/global_init.h"
+#include "common/debug.h"
+#include "common/config.h"
+
 #include "mon/MonitorDBStore.h"
 #include "mon/MonitorStore.h"
 
@@ -170,13 +175,24 @@ void usage(const char *pname)
     << std::endl;
 }
 
-int main(int argc, char *argv[])
+int main(int argc, const char *argv[])
 {
-  if (argc < 2) {
-    usage(argv[0]);
+  vector<const char*> def_args;
+  vector<const char*> args;
+  const char *our_name = argv[0];
+  argv_to_vec(argc, argv, args);
+
+  global_init(&def_args, args,
+	      CEPH_ENTITY_TYPE_CLIENT, CODE_ENVIRONMENT_UTILITY,
+	      CINIT_FLAG_NO_DEFAULT_CONFIG_FILE);
+  common_init_finish(g_ceph_context);
+  g_ceph_context->_conf->apply_changes(NULL);
+
+  if (args.size() < 1) {
+    usage(our_name);
     return 1;
   }
-  string store(argv[1]);
+  string store(args[0]);
   string new_store;
   {
     string::const_reverse_iterator rit;
