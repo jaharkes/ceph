@@ -52,7 +52,14 @@ class MonitorStoreConverter {
   }
 
   int convert() {
+
+    assert(!db->exists("mon_convert", "on_going"));
+    _mark_convert_start();
+    _convert_monitor();
     _convert_machines();
+    _mark_convert_finish();
+
+    std::cout << __func__ << " finished conversion" << std::endl;
 
     return 0;
   }
@@ -73,6 +80,21 @@ class MonitorStoreConverter {
     names.insert("pgmap");
 
     return names;
+  }
+
+  void _mark_convert_start() {
+    MonitorDBStore::Transaction tx;
+    tx.put("mon_convert", "on_going", 1);
+    db->apply_transaction(tx);
+  }
+
+  void _mark_convert_finish() {
+    MonitorDBStore::Transaction tx;
+    tx.erase("mon_convert", "on_going");
+    db->apply_transaction(tx);
+  }
+
+  void _convert_monitor() {
   }
 
   void _convert_machines(string machine) {
