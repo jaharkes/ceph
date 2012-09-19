@@ -52,11 +52,7 @@ class MonitorStoreConverter {
   }
 
   int convert() {
-
-    int r;
-
-    r = _convert_machines();
-    assert(r == 0);
+    _convert_machines();
 
     return 0;
   }
@@ -79,7 +75,7 @@ class MonitorStoreConverter {
     return names;
   }
 
-  int _convert_machines(string machine) {
+  void _convert_machines(string machine) {
     std::cout << __func__ << " " << machine << std::endl;
 
     version_t first_committed =
@@ -148,11 +144,9 @@ class MonitorStoreConverter {
     tx.put(machine, "first_committed", first_committed);
     tx.put(machine, "last_committed", last_committed);
     db->apply_transaction(tx);
-
-    return 0;
   }
 
-  int _convert_paxos() {
+  void _convert_paxos() {
     assert(gvs.size() > 0);
 
     set<version_t>::reverse_iterator rit = gvs.rbegin();
@@ -188,27 +182,20 @@ class MonitorStoreConverter {
     tx.put("paxos", "accepted_pn", highest_accepted_pn);
     tx.put("paxos", "last_pn", highest_last_pn);
     db->apply_transaction(tx);
-
-    return 0;
   }
 
-  int _convert_machines() {
+  void _convert_machines() {
 
     set<string> machine_names = _get_machines_names();
     set<string>::iterator it = machine_names.begin();
 
     std::cout << __func__ << std::endl;
 
-    int r = 0;
     for (; it != machine_names.end(); ++it) {
-      r = _convert_machines(*it);
-      assert(r == 0);
+      _convert_machines(*it);
     }
 
-    r = _convert_paxos();
-    assert(r == 0);
-
-    return 0;
+    _convert_paxos();
   }
 };
 
