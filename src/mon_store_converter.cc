@@ -32,9 +32,11 @@ class MonitorStoreConverter {
   boost::scoped_ptr<MonitorDBStore> db;
   boost::scoped_ptr<MonitorStore> store;
 
-  map<version_t,pair<string,version_t> > gv_to_machine_version;
+  set<version_t> gvs;
   version_t highest_last_pn;
   version_t highest_accepted_pn;
+
+  static const int PAXOS_MAX_VERSIONS = 50;
 
  public:
   MonitorStoreConverter(string &store_path, string &db_store_path)
@@ -129,6 +131,9 @@ class MonitorStoreConverter {
 	std::cerr << __func__ << " " << machine
 		  << " ver " << ver << " -> " << gv << std::endl;
 
+	assert(gvs.count(gv) == 0);
+	gvs.insert(gv);
+
 	bufferlist tx_bl;
 	tx.encode(tx_bl);
 	tx.put("paxos", gv, tx_bl);
@@ -147,6 +152,46 @@ class MonitorStoreConverter {
     return 0;
   }
 
+  int _convert_paxos() {
+    assert(gvs.size() > 0);
+
+    set<version_t>::reverse_iterator rit = gvs.rbegin();
+    version_t highest_gv = *rit;
+    version_t last_gv = highest_gv;
+
+    int n = 0;
+    for (; (rit != gvs.rend()) && (n < PAXOS_MAX_VERSIONS); ++rit, ++n) {
+
+      version_t gv = *rit;
+
+      if (last_gv == gv)
+	continue;
+
+      if ((last_gv - gv) > 1) {
+	  // we are done; we found a gap and we are only interested in keeping
+	  // contiguous paxos versions.
+	  break;
+      }
+      last_gv = gv;
+    }
+
+    // erase all paxos versions between [first, last_gv[, with first being the
+    // first gv in the map.
+    MonitorDBStore::Transaction tx;
+    set<version_t>::iterator it = gvs.begin();
+    for (; it != gvs.end() && (*it < last_gv); ++it) {
+      tx.erase("paxos", *it);
+    }
+    assert(!tx.empty());
+    tx.put("paxos", "first_committed", last_gv);
+    tx.put("paxos", "last_committed", highest_gv);
+    tx.put("paxos", "accepted_pn", highest_accepted_pn);
+    tx.put("paxos", "last_pn", highest_last_pn);
+    db->apply_transaction(tx);
+
+    return 0;
+  }
+
   int _convert_machines() {
 
     set<string> machine_names = _get_machines_names();
@@ -154,15 +199,14 @@ class MonitorStoreConverter {
 
     std::cout << __func__ << std::endl;
 
+    int r = 0;
     for (; it != machine_names.end(); ++it) {
-      int r = _convert_machines(*it);
+      r = _convert_machines(*it);
       assert(r == 0);
     }
 
-    MonitorDBStore::Transaction tx;
-    tx.put("paxos", "accepted_pn", highest_accepted_pn);
-    tx.put("paxos", "last_pn", highest_last_pn);
-    db->apply_transaction(tx);
+    r = _convert_paxos();
+    assert(r == 0);
 
     return 0;
   }
