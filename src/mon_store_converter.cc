@@ -16,7 +16,10 @@
 #include <map>
 #include <set>
 #include <boost/scoped_ptr.hpp>
+#include <errno.h>
 
+#include "include/types.h"
+#include "include/buffer.h"
 #include "common/ceph_argparse.h"
 #include "global/global_init.h"
 #include "common/debug.h"
@@ -37,11 +40,13 @@ class MonitorStoreConverter {
   version_t highest_accepted_pn;
 
   static const int PAXOS_MAX_VERSIONS = 50;
+  string MONITOR_NAME;
 
  public:
   MonitorStoreConverter(string &store_path, string &db_store_path)
     : db(0), store(0),
-      highest_last_pn(0), highest_accepted_pn(0)
+      highest_last_pn(0), highest_accepted_pn(0),
+      MONITOR_NAME("monitor")
   {
     MonitorStore *store_ptr = new MonitorStore(store_path);
     assert(!store_ptr->mount());
@@ -52,8 +57,11 @@ class MonitorStoreConverter {
   }
 
   int convert() {
-
-    assert(!db->exists("mon_convert", "on_going"));
+    if (db->exists("mon_convert", "on_going")) {
+      std::cout << __func__ << " found a mon store in mid-convertion; abort!"
+		<< std::endl;
+      return EEXIST;
+    }
     _mark_convert_start();
     _convert_monitor();
     _convert_machines();
@@ -95,6 +103,38 @@ class MonitorStoreConverter {
   }
 
   void _convert_monitor() {
+
+    assert(store->exists_bl_ss("magic"));
+    assert(store->exists_bl_ss("keyring"));
+    assert(store->exists_bl_ss("feature_set"));
+    assert(store->exists_bl_ss("election_epoch"));
+
+    MonitorDBStore::Transaction tx;
+
+    if (store->exists_bl_ss("joined")) {
+      version_t joined = store->get_int("joined");
+      tx.put(MONITOR_NAME, "joined", joined);
+    }
+
+    vector<string> keys;
+    keys.push_back("magic");
+    keys.push_back("feature_set");
+    keys.push_back("election_epoch");
+    keys.push_back("cluster_uuid");
+
+    vector<string>::iterator it;
+    for (it = keys.begin(); it != keys.end(); ++it) {
+      if (!store->exists_bl_ss((*it).c_str()))
+	continue;
+
+      bufferlist bl;
+      int r = store->get_bl_ss(bl, (*it).c_str(), 0);
+      assert(r > 0);
+      tx.put(MONITOR_NAME, *it, bl);
+    }
+
+    assert(!tx.empty());
+    db->apply_transaction(tx);
   }
 
   void _convert_machines(string machine) {
