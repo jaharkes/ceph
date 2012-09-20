@@ -205,6 +205,18 @@ class MonitorStoreConverter {
     MonitorDBStore::Transaction tx;
     tx.put(machine, "first_committed", first_committed);
     tx.put(machine, "last_committed", last_committed);
+
+    if (store->exists_bl_ss(machine.c_str(), "latest")) {
+      bufferlist latest_bl;
+      int r = store->get_bl_ss(latest_bl, machine.c_str(), "latest");
+      assert(r >= 0);
+      tx.put(machine, "latest", latest_bl);
+      tx.put(machine, "full_latest", last_committed);
+      stringstream os;
+      os << "full_" << last_committed;
+      tx.put(machine, os.str(), latest_bl);
+    }
+
     db->apply_transaction(tx);
   }
 
