@@ -159,7 +159,7 @@ Monitor::Monitor(CephContext* cct_, string nm, MonitorDBStore *s,
   paxos_service[PAXOS_MONMAP] = new MonmapMonitor(this, paxos, "monmap");
   paxos_service[PAXOS_OSDMAP] = new OSDMonitor(this, paxos, "osdmap");
   paxos_service[PAXOS_PGMAP] = new PGMonitor(this, paxos, "pgmap");
-  paxos_service[PAXOS_LOG] = new LogMonitor(this, paxos, "log");
+  paxos_service[PAXOS_LOG] = new LogMonitor(this, paxos, "logm");
   paxos_service[PAXOS_AUTH] = new AuthMonitor(this, paxos, "auth");
 
   mon_caps = new MonCaps();
