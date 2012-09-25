@@ -189,8 +189,13 @@ class MonitorStoreConverter {
 	std::cerr << __func__ << " " << machine
 		  << " ver " << ver << " -> " << gv << std::endl;
 
-	assert(gvs.count(gv) == 0);
-	gvs.insert(gv);
+	if (gvs.count(gv) == 0) {
+	  gvs.insert(gv);
+	} else {
+	  std::cerr << __func__ << " " << machine
+		    << " gv " << gv << " already exists"
+		    << std::endl;
+	}
 
 	bufferlist tx_bl;
 	tx.encode(tx_bl);
@@ -207,16 +212,32 @@ class MonitorStoreConverter {
     tx.put(machine, "last_committed", last_committed);
 
     if (store->exists_bl_ss(machine.c_str(), "latest")) {
-      bufferlist latest_bl;
-      int r = store->get_bl_ss(latest_bl, machine.c_str(), "latest");
+      bufferlist latest_bl_raw;
+      int r = store->get_bl_ss(latest_bl_raw, machine.c_str(), "latest");
       assert(r >= 0);
-      tx.put(machine, "latest", latest_bl);
-      tx.put(machine, "full_latest", last_committed);
+      if (!latest_bl_raw.length()) {
+	std::cerr << __func__ << " machine " << machine
+		  << " skip latest with size 0" << std::endl;
+	goto out;
+      }
+
+      tx.put(machine, "latest", latest_bl_raw);
+
+      bufferlist::iterator lbl_it = latest_bl_raw.begin();
+      bufferlist latest_bl;
+      version_t latest_ver;
+      ::decode(latest_ver, lbl_it);
+      ::decode(latest_bl, lbl_it);
+
+      std::cout << __func__ << " machine " << machine
+		<< " latest ver " << latest_ver << std::endl;
+
+      tx.put(machine, "full_latest", latest_ver);
       stringstream os;
-      os << "full_" << last_committed;
+      os << "full_" << latest_ver;
       tx.put(machine, os.str(), latest_bl);
     }
-
+  out:
     db->apply_transaction(tx);
   }
 
@@ -247,10 +268,11 @@ class MonitorStoreConverter {
     // first gv in the map.
     MonitorDBStore::Transaction tx;
     set<version_t>::iterator it = gvs.begin();
+    std::cout << __func__ << " first gv " << (*it)
+	      << " last gv " << last_gv << std::endl;
     for (; it != gvs.end() && (*it < last_gv); ++it) {
       tx.erase("paxos", *it);
     }
-    assert(!tx.empty());
     tx.put("paxos", "first_committed", last_gv);
     tx.put("paxos", "last_committed", highest_gv);
     tx.put("paxos", "accepted_pn", highest_accepted_pn);
