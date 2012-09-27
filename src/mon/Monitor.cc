@@ -23,6 +23,7 @@
 
 #include "osd/OSDMap.h"
 
+#include "MonitorStore.h"
 #include "MonitorDBStore.h"
 
 #include "msg/Messenger.h"
@@ -3861,3 +3862,251 @@ bool Monitor::ms_verify_authorizer(Connection *con, int peer_type,
   }
   return true;
 };
+
+#undef dout_prefix
+#define dout_prefix *_dout
+
+bool Monitor::StoreConverter::needs_conversion()
+{
+  bool ret = false;
+
+  dout(10) << __func__ << dendl;
+  _init();
+  if (db->open(std::cerr) < 0) {
+    dout(1) << "unable to open monitor store at " << g_conf->mon_data << dendl;
+    dout(1) << "check for old monitor store format" << dendl;
+    assert(!store->mount());
+    bufferlist magicbl;
+    if (store->exists_bl_ss("magic", 0)) {
+      dout(1) << "found old monitor store format -- should convert!" << dendl;
+      ret = true;
+    }
+    assert(!store->umount());
+  }
+  _deinit();
+  return ret;
+}
+
+int Monitor::StoreConverter::convert()
+{
+  _init();
+  assert(!db->create_and_open(std::cerr));
+  assert(!store->mount());
+  if (db->exists("mon_convert", "on_going")) {
+    dout(0) << __func__ << " found a mon store in mid-convertion; abort!"
+      << dendl;
+    return -EEXIST;
+  }
+
+  _mark_convert_start();
+  _convert_monitor();
+  _convert_machines();
+  _convert_paxos();
+  _mark_convert_finish();
+
+  store->umount();
+  _deinit();
+
+  dout(0) << __func__ << " finished conversion" << dendl;
+
+  return 0;
+}
+
+void Monitor::StoreConverter::_convert_monitor()
+{
+  dout(10) << __func__ << dendl;
+
+  assert(store->exists_bl_ss("magic"));
+  assert(store->exists_bl_ss("keyring"));
+  assert(store->exists_bl_ss("feature_set"));
+  assert(store->exists_bl_ss("election_epoch"));
+
+  MonitorDBStore::Transaction tx;
+
+  if (store->exists_bl_ss("joined")) {
+    version_t joined = store->get_int("joined");
+    tx.put(MONITOR_NAME, "joined", joined);
+  }
+
+  vector<string> keys;
+  keys.push_back("magic");
+  keys.push_back("feature_set");
+  keys.push_back("election_epoch");
+  keys.push_back("cluster_uuid");
+
+  vector<string>::iterator it;
+  for (it = keys.begin(); it != keys.end(); ++it) {
+    if (!store->exists_bl_ss((*it).c_str()))
+      continue;
+
+    bufferlist bl;
+    int r = store->get_bl_ss(bl, (*it).c_str(), 0);
+    assert(r > 0);
+    tx.put(MONITOR_NAME, *it, bl);
+  }
+
+  assert(!tx.empty());
+  db->apply_transaction(tx);
+  dout(10) << __func__ << " finished" << dendl;
+}
+
+void Monitor::StoreConverter::_convert_machines(string machine)
+{
+  dout(10) << __func__ << " " << machine << dendl;
+
+  version_t first_committed =
+    store->get_int(machine.c_str(), "first_committed");
+  version_t last_committed =
+    store->get_int(machine.c_str(), "last_committed");
+
+  version_t accepted_pn = store->get_int(machine.c_str(), "accepted_pn");
+  version_t last_pn = store->get_int(machine.c_str(), "last_pn");
+
+  if (accepted_pn > highest_accepted_pn)
+    highest_accepted_pn = accepted_pn;
+  if (last_pn > highest_last_pn)
+    highest_last_pn = last_pn;
+
+  string machine_gv(machine);
+  machine_gv.append("_gv");
+  bool has_gv = true;
+
+  if (!store->exists_bl_ss(machine_gv.c_str())) {
+    dout(1) << __func__ << " " << machine
+      << " no gv dir '" << machine_gv << "'" << dendl;
+    has_gv = false;
+  }
+
+  for (version_t ver = first_committed; ver <= last_committed; ver++) {
+    if (!store->exists_bl_sn(machine.c_str(), ver)) {
+      dout(20) << __func__ << " " << machine
+	       << " ver " << ver << " dne" << dendl;
+      continue;
+    }
+
+    bufferlist bl;
+    int r = store->get_bl_sn(bl, machine.c_str(), ver);
+    assert(r >= 0);
+    dout(20) << __func__ << " " << machine
+	     << " ver " << ver << " bl " << bl.length() << dendl;
+
+    MonitorDBStore::Transaction tx;
+    tx.put(machine, ver, bl);
+    tx.put(machine, "last_committed", ver);
+
+    if (has_gv && store->exists_bl_sn(machine_gv.c_str(), ver)) {
+      stringstream s;
+      s << ver;
+      string ver_str = s.str();
+
+      version_t gv = store->get_int(machine_gv.c_str(), ver_str.c_str());
+      dout(20) << __func__ << " " << machine
+	       << " ver " << ver << " -> " << gv << dendl;
+
+      if (gvs.count(gv) == 0) {
+	gvs.insert(gv);
+      } else {
+	dout(0) << __func__ << " " << machine
+		<< " gv " << gv << " already exists"
+		<< dendl;
+	assert(0 == "Duplicate GV -- something is wrong!");
+      }
+
+      bufferlist tx_bl;
+      tx.encode(tx_bl);
+      tx.put("paxos", gv, tx_bl);
+    }
+    db->apply_transaction(tx);
+  }
+
+  version_t lc = db->get(machine, "last_committed");
+  assert(lc == last_committed);
+
+  MonitorDBStore::Transaction tx;
+  tx.put(machine, "first_committed", first_committed);
+  tx.put(machine, "last_committed", last_committed);
+
+  if (store->exists_bl_ss(machine.c_str(), "latest")) {
+    bufferlist latest_bl_raw;
+    int r = store->get_bl_ss(latest_bl_raw, machine.c_str(), "latest");
+    assert(r >= 0);
+    if (!latest_bl_raw.length()) {
+      dout(20) << __func__ << " machine " << machine
+	       << " skip latest with size 0" << dendl;
+      goto out;
+    }
+
+    tx.put(machine, "latest", latest_bl_raw);
+
+    bufferlist::iterator lbl_it = latest_bl_raw.begin();
+    bufferlist latest_bl;
+    version_t latest_ver;
+    ::decode(latest_ver, lbl_it);
+    ::decode(latest_bl, lbl_it);
+
+    dout(20) << __func__ << " machine " << machine
+	     << " latest ver " << latest_ver << dendl;
+
+    tx.put(machine, "full_latest", latest_ver);
+    stringstream os;
+    os << "full_" << latest_ver;
+    tx.put(machine, os.str(), latest_bl);
+  }
+out:
+  db->apply_transaction(tx);
+  dout(10) << __func__ << " machine " << machine << " finished" << dendl;
+}
+
+void Monitor::StoreConverter::_convert_paxos()
+{
+  dout(10) << __func__ << dendl;
+  assert(gvs.size() > 0);
+
+  set<version_t>::reverse_iterator rit = gvs.rbegin();
+  version_t highest_gv = *rit;
+  version_t last_gv = highest_gv;
+
+  int n = 0;
+  int max_versions = (g_conf->paxos_max_join_drift*2);
+  for (; (rit != gvs.rend()) && (n < max_versions); ++rit, ++n) {
+    version_t gv = *rit;
+
+    if (last_gv == gv)
+      continue;
+    if ((last_gv - gv) > 1) {
+      // we are done; we found a gap and we are only interested in keeping
+      // contiguous paxos versions.
+      break;
+    }
+    last_gv = gv;
+  }
+
+  // erase all paxos versions between [first, last_gv[, with first being the
+  // first gv in the map.
+  MonitorDBStore::Transaction tx;
+  set<version_t>::iterator it = gvs.begin();
+  dout(1) << __func__ << " first gv " << (*it)
+	  << " last gv " << last_gv << dendl;
+  for (; it != gvs.end() && (*it < last_gv); ++it) {
+    tx.erase("paxos", *it);
+  }
+  tx.put("paxos", "first_committed", last_gv);
+  tx.put("paxos", "last_committed", highest_gv);
+  tx.put("paxos", "accepted_pn", highest_accepted_pn);
+  tx.put("paxos", "last_pn", highest_last_pn);
+  db->apply_transaction(tx);
+
+  dout(10) << __func__ << " finished" << dendl;
+}
+
+void Monitor::StoreConverter::_convert_machines()
+{
+  dout(10) << __func__ << dendl;
+  set<string> machine_names = _get_machines_names();
+  set<string>::iterator it = machine_names.begin();
+
+  for (; it != machine_names.end(); ++it) {
+    _convert_machines(*it);
+  }
+  dout(10) << __func__ << " finished" << dendl;
+}
