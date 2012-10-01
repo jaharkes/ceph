@@ -4095,6 +4095,7 @@ void Monitor::StoreConverter::_convert_paxos()
   tx.put("paxos", "last_committed", highest_gv);
   tx.put("paxos", "accepted_pn", highest_accepted_pn);
   tx.put("paxos", "last_pn", highest_last_pn);
+  tx.put("paxos", "conversion_first", last_gv);
   db->apply_transaction(tx);
 
   dout(10) << __func__ << " finished" << dendl;
