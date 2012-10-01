@@ -198,7 +198,7 @@ void LogMonitor::encode_pending(MonitorDBStore::Transaction *t)
 void LogMonitor::encode_full(MonitorDBStore::Transaction *t)
 {
   dout(10) << __func__ << " log v " << summary.version << dendl;
-  assert(get_version()+1 == summary.version);
+  assert(get_version() == summary.version);
 
   bufferlist summary_bl;
   ::encode(summary, summary_bl);

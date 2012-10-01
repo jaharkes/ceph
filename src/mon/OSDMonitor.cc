@@ -480,7 +480,7 @@ void OSDMonitor::encode_pending(MonitorDBStore::Transaction *t)
 void OSDMonitor::encode_full(MonitorDBStore::Transaction *t)
 {
   dout(10) << __func__ << " osdmap e " << osdmap.epoch << dendl;
-  assert(get_version() + 1 == osdmap.epoch);
+  assert(get_version() == osdmap.epoch);
  
   bufferlist osdmap_bl;
   osdmap.encode(osdmap_bl);

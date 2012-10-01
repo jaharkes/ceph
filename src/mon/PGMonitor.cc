@@ -265,7 +265,7 @@ void PGMonitor::encode_pending(MonitorDBStore::Transaction *t)
 void PGMonitor::encode_full(MonitorDBStore::Transaction *t)
 {
   dout(10) << __func__ << " pgmap v " << pg_map.version << dendl;
-  assert(get_version() + 1 == pg_map.version);
+  assert(get_version() == pg_map.version);
 
   bufferlist full_bl;
   pg_map.encode(full_bl, mon->get_quorum_features());

@@ -251,7 +251,7 @@ void AuthMonitor::encode_full(MonitorDBStore::Transaction *t)
 {
   version_t version = mon->key_server.get_ver();
   dout(10) << __func__ << " auth v " << version << dendl;
-  assert(get_version() + 1 == version);
+  assert(get_version() == version);
 
   bufferlist full_bl;
   Mutex::Locker l(mon->key_server.get_lock());
