@@ -374,7 +374,8 @@ int main(int argc, const char **argv)
   messenger->set_policy(entity_name_t::TYPE_MON,
                         Messenger::Policy::lossless_peer_reuse(supported,
 							       CEPH_FEATURE_UID |
-							       CEPH_FEATURE_PGID64));
+							       CEPH_FEATURE_PGID64 |
+							       CEPH_FEATURE_MON_SINGLE_PAXOS));
   messenger->set_policy(entity_name_t::TYPE_OSD,
                         Messenger::Policy::stateless_server(supported,
                                                             CEPH_FEATURE_PGID64 |
