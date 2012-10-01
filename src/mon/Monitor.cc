@@ -4025,6 +4025,7 @@ void Monitor::StoreConverter::_convert_machines(string machine)
   MonitorDBStore::Transaction tx;
   tx.put(machine, "first_committed", first_committed);
   tx.put(machine, "last_committed", last_committed);
+  tx.put(machine, "conversion_first", first_committed);
 
   if (store->exists_bl_ss(machine.c_str(), "latest")) {
     bufferlist latest_bl_raw;
