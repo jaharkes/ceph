@@ -247,7 +247,7 @@ CompatSet Monitor::get_supported_features()
   CompatSet::FeatureSet ceph_mon_feature_ro_compat;
   CompatSet::FeatureSet ceph_mon_feature_incompat;
   ceph_mon_feature_incompat.insert(CEPH_MON_FEATURE_INCOMPAT_BASE);
-  ceph_mon_feature_incompat.insert(CEPH_MON_FEATURE_INCOMPAT_GV);
+  ceph_mon_feature_incompat.insert(CEPH_MON_FEATURE_INCOMPAT_SINGLE_PAXOS);
   return CompatSet(ceph_mon_feature_compat, ceph_mon_feature_ro_compat,
 		   ceph_mon_feature_incompat);
 }
@@ -3866,6 +3866,53 @@ bool Monitor::ms_verify_authorizer(Connection *con, int peer_type,
 #undef dout_prefix
 #define dout_prefix *_dout
 
+void Monitor::StoreConverter::_convert_finish_features(
+    MonitorDBStore::Transaction &t)
+{
+  dout(20) << __func__ << dendl;
+
+  assert(db->exists(MONITOR_NAME, COMPAT_SET_LOC));
+  bufferlist features_bl;
+  db->get(MONITOR_NAME, COMPAT_SET_LOC, features_bl);
+  assert(features_bl.length());
+
+  CompatSet features;
+  bufferlist::iterator p = features_bl.begin();
+  features.decode(p);
+
+  assert(features.incompat.contains(CEPH_MON_FEATURE_INCOMPAT_GV));
+  features.incompat.remove(CEPH_MON_FEATURE_INCOMPAT_GV);
+  assert(!features.incompat.contains(CEPH_MON_FEATURE_INCOMPAT_GV));
+
+  features.incompat.insert(CEPH_MON_FEATURE_INCOMPAT_SINGLE_PAXOS);
+  assert(features.incompat.contains(CEPH_MON_FEATURE_INCOMPAT_SINGLE_PAXOS));
+
+  features_bl.clear();
+  features.encode(features_bl);
+
+  dout(20) << __func__ << " new features " << features << dendl;
+  t.put(MONITOR_NAME, COMPAT_SET_LOC, features_bl);
+}
+
+
+bool Monitor::StoreConverter::_check_gv_store()
+{
+  dout(20) << __func__ << dendl;
+  if (!store->exists_bl_ss(COMPAT_SET_LOC, 0))
+    return false;
+
+  bufferlist features_bl;
+  store->get_bl_ss_safe(features_bl, COMPAT_SET_LOC, 0);
+  if (!features_bl.length()) {
+    dout(20) << __func__ << " on-disk features length is zero" << dendl;
+    return false;
+  }
+  CompatSet features;
+  bufferlist::iterator p = features_bl.begin();
+  features.decode(p);
+  return (features.incompat.contains(CEPH_MON_FEATURE_INCOMPAT_GV));
+}
+
 bool Monitor::StoreConverter::needs_conversion()
 {
   bool ret = false;
@@ -3878,8 +3925,15 @@ bool Monitor::StoreConverter::needs_conversion()
     assert(!store->mount());
     bufferlist magicbl;
     if (store->exists_bl_ss("magic", 0)) {
-      dout(1) << "found old monitor store format -- should convert!" << dendl;
-      ret = true;
+      if (_check_gv_store()) {
+	dout(1) << "found old GV monitor store format "
+		<< "-- should convert!" << dendl;
+	ret = true;
+      } else {
+	dout(0) << "Existing monitor store has not been converted "
+		<< "to 0.52 (bobtail) format" << dendl;
+	assert(0 == "Existing store has not been converted to 0.52 format");
+      }
     }
     assert(!store->umount());
   }
