@@ -2088,15 +2088,14 @@ bool Monitor::_ms_dispatch(Message *m)
 	  break;
 	}
 
-	// send it to the right paxos instance
-	assert(pm->machine_id < PAXOS_NUM);
-	//Paxos *p = paxos[pm->machine_id];
-	Paxos *p = paxos;
-	p->dispatch((PaxosServiceMessage*)m);
+	paxos->dispatch((PaxosServiceMessage*)m);
 
 	// make sure service finds out about any state changes
-	if (p->is_active())
-	  paxos_service[p->machine_id]->update_from_paxos();
+	if (paxos->is_active()) {
+	  vector<PaxosService*>::iterator service_it = paxos_service.begin();
+	  for ( ; service_it != paxos_service.end(); ++service_it)
+	    (*service_it)->update_from_paxos();
+	}
       }
       break;
 

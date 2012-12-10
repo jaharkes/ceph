@@ -23,11 +23,11 @@
 
 #define dout_subsys ceph_subsys_paxos
 #undef dout_prefix
-#define dout_prefix _prefix(_dout, mon, paxos, paxos->machine_id)
-static ostream& _prefix(std::ostream *_dout, Monitor *mon, Paxos *paxos, int machine_id) {
+#define dout_prefix _prefix(_dout, mon, paxos, service_name)
+static ostream& _prefix(std::ostream *_dout, Monitor *mon, Paxos *paxos, string service_name) {
   return *_dout << "mon." << mon->name << "@" << mon->rank
 		<< "(" << mon->get_state_name()
-		<< ").paxosservice(" << get_paxos_name(machine_id) << ") ";
+		<< ").paxosservice(" << service_name << ") ";
 }
 
 bool PaxosService::dispatch(PaxosServiceMessage *m)
