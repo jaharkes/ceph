@@ -247,13 +247,13 @@ CompatSet Monitor::get_legacy_features()
 		   ceph_mon_feature_incompat);
 }
 
-int Monitor::check_features(MonitorStore *store)
+int Monitor::check_features(MonitorDBStore *store)
 {
   CompatSet required = get_supported_features();
   CompatSet ondisk;
 
   bufferlist features;
-  store->get_bl_ss_safe(features, COMPAT_SET_LOC, 0);
+  store->get(MONITOR_NAME, COMPAT_SET_LOC, features);
   if (features.length() == 0) {
     generic_dout(0) << "WARNING: mon fs missing feature list.\n"
 	    << "Assuming it is old-style and introducing one." << dendl;
@@ -264,7 +264,9 @@ int Monitor::check_features(MonitorStore *store)
 
     bufferlist bl;
     ondisk.encode(bl);
-    store->put_bl_ss(bl, COMPAT_SET_LOC, 0);
+    MonitorDBStore::Transaction t;
+    t.put(MONITOR_NAME, COMPAT_SET_LOC, bl);
+    store->apply_transaction(t);
   } else {
     bufferlist::iterator it = features.begin();
     ondisk.decode(it);
@@ -282,7 +284,7 @@ int Monitor::check_features(MonitorStore *store)
 void Monitor::read_features()
 {
   bufferlist bl;
-  store->get_bl_ss_safe(bl, COMPAT_SET_LOC, 0);
+  store->get(MONITOR_NAME, COMPAT_SET_LOC, bl);
   assert(bl.length());
 
   bufferlist::iterator p = bl.begin();
@@ -290,11 +292,11 @@ void Monitor::read_features()
   dout(10) << "features " << features << dendl;
 }
 
-void Monitor::write_features()
+void Monitor::write_features(MonitorDBStore::Transaction &t)
 {
   bufferlist bl;
   features.encode(bl);
-  store->put_bl_ss(bl, COMPAT_SET_LOC, 0);
+  t.put(MONITOR_NAME, COMPAT_SET_LOC, bl);
 }
 
 int Monitor::preinit()
@@ -2733,9 +2735,12 @@ int Monitor::check_fsid()
   ss << monmap->get_fsid();
   string us = ss.str();
   bufferlist ebl;
-  int r = store->get_bl_ss(ebl, "cluster_uuid", 0);
-  if (r < 0)
-    return r;
+
+  if (!store->exists(MONITOR_NAME, "cluster_uuid"))
+    return -ENOENT;
+
+  int r = store->get(MONITOR_NAME, "cluster_uuid", ebl);
+  assert(r == 0);
 
   string es(ebl.c_str(), ebl.length());
 
@@ -2757,13 +2762,22 @@ int Monitor::check_fsid()
 
 int Monitor::write_fsid()
 {
+  MonitorDBStore::Transaction t;
+  int r = write_fsid(t);
+  store->apply_transaction(t);
+  return r;
+}
+
+int Monitor::write_fsid(MonitorDBStore::Transaction &t)
+{
   ostringstream ss;
   ss << monmap->get_fsid() << "\n";
   string us = ss.str();
 
   bufferlist b;
   b.append(us);
-  store->put_bl_ss(b, "cluster_uuid", 0);
+
+  t.put(MONITOR_NAME, "cluster_uuid", b);
   return 0;
 }
 
@@ -2787,7 +2801,7 @@ int Monitor::mkfs(bufferlist& osdmapbl)
 
 
   features = get_supported_features();
-  write_features();
+  write_features(t);
 
   // save monmap, osdmap, keyring.
   bufferlist monmapbl;
@@ -2827,13 +2841,8 @@ int Monitor::mkfs(bufferlist& osdmapbl)
   bufferlist keyringbl;
   keyring.encode_plaintext(keyringbl);
   t.put("mkfs", "keyring", keyringbl);
+  write_fsid(t);
   store->apply_transaction(t);
-
-  // sync and write out fsid to indicate completion.
-  store->sync();
-  r = write_fsid();
-  if (r < 0)
-    return r;
 
   return 0;
 }

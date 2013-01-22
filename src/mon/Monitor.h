@@ -490,14 +490,14 @@ public:
   static CompatSet get_supported_features();
   static CompatSet get_legacy_features();
   void read_features();
-  void write_features();
+  void write_features(MonitorDBStore::Transaction &t);
 
  public:
   Monitor(CephContext *cct_, string nm, MonitorDBStore *s,
 	  Messenger *m, MonMap *map);
   ~Monitor();
 
-  static int check_features(MonitorStore *store);
+  static int check_features(MonitorDBStore *store);
 
   int preinit();
   int init();
@@ -523,6 +523,7 @@ public:
    * @return 0 on success, or negative error code
    */
   int write_fsid();
+  int write_fsid(MonitorDBStore::Transaction &t);
 
   void do_admin_command(std::string command, std::string args, ostream& ss);
 
