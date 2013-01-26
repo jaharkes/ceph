@@ -137,6 +137,7 @@ Monitor::Monitor(CephContext* cct_, string nm, MonitorDBStore *s,
   sync_role(SYNC_ROLE_NONE),
   trim_lock("Monitor::trim_lock"),
   trim_enable_timer(NULL),
+  sync_rng(getpid()),
   sync_state(SYNC_STATE_NONE),
   sync_leader(),
   sync_provider(),
@@ -901,6 +902,19 @@ void Monitor::handle_sync_finish(MMonSync *m)
 
 // synchronization provider
 
+string Monitor::_pick_random_mon(int other)
+{
+  assert(monmap->size() > 0);
+  if (monmap->size() == 1)
+    return monmap->get_name(0);
+
+  int max = monmap->size();
+  int n = sync_rng() % max;
+  if (other >= 0 && n >= other)
+    n++;
+  return monmap->get_name(n);
+}
+
 void Monitor::sync_timeout(entity_inst_t &entity)
 {
   if (state == STATE_SYNCHRONIZING) {
@@ -930,7 +944,7 @@ void Monitor::sync_timeout(entity_inst_t &entity)
       // we are trying to pick a random monitor, but we cannot do this forever.
       // in case something goes awfully wrong, just stop doing it after a
       // couple of attempts and try again later.
-      string new_mon = monmap->pick_random_mon();
+      string new_mon = _pick_random_mon();
 
       if (!debug_fallback.empty()) {
 	if (entity_name != debug_fallback)

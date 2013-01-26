@@ -36,6 +36,7 @@
 #include "osd/OSDMap.h"
 
 #include "common/LogClient.h"
+#include "common/SimpleRNG.h"
 
 #include "auth/cephx/CephxKeyServer.h"
 #include "auth/AuthMethodList.h"
@@ -696,6 +697,17 @@ private:
    * providers.
    */
   map<entity_inst_t, SyncEntity> sync_entities;
+  /**
+   * RNG used for the sync (currently only used to pick random monitors)
+   */
+  SimpleRNG sync_rng;
+  /**
+   * Obtain random monitor from the monmap.
+   *
+   * @param other Any monitor other than the one with rank @p other
+   * @returns The picked monitor's name.
+   */
+  string _pick_random_mon(int other = -1);
   /**
    * Deal with the consequences of @p entity's sync timing out.
    *
