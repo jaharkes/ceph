@@ -3498,10 +3498,8 @@ void Monitor::tick()
   // ok go.
   dout(11) << "tick" << dendl;
   
-  if (!is_slurping()) {
-    for (vector<PaxosService*>::iterator p = paxos_service.begin(); p != paxos_service.end(); p++) {
-      (*p)->tick();
-    }
+  for (vector<PaxosService*>::iterator p = paxos_service.begin(); p != paxos_service.end(); p++) {
+    (*p)->tick();
   }
   
   // trim sessions
