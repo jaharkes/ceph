@@ -425,15 +425,9 @@ int Monitor::preinit()
     extract_save_mon_key(keyring);
   }
 
-  string keyring_loc;
-
-  if (g_conf->keyring != "keyring")
-    keyring_loc = g_conf->keyring;
-  else {
-    ostringstream os;
-    os << g_conf->mon_data << "/keyring";
-    keyring_loc = os.str();
-  }
+  ostringstream os;
+  os << g_conf->mon_data << "/keyring";
+  string keyring_loc = os.str();
 
   int r = keyring.load(cct, keyring_loc);
   if (r < 0) {
