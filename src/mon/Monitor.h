@@ -1419,9 +1419,6 @@ public:
 
     void _deinit() {
       db.reset(NULL);
-
-      if (store.get() != NULL)
-	store->umount();
       store.reset(NULL);
     }
 
