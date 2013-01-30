@@ -79,13 +79,11 @@ ceph_mon_LDADD = libmon.a $(LIBOS_LDA) $(LIBGLOBAL_LDA)
 ceph_mon_CXXFLAGS = ${CRYPTO_CXXFLAGS} ${AM_CXXFLAGS} $(LEVELDB_INCLUDE)
 bin_PROGRAMS += ceph-mon
 
-mon_store_converter_SOURCES = \
-  mon_store_converter.cc \
-	mon/MonitorStore.cc
+mon_store_converter_SOURCES =  mon_store_converter.cc \
+			       mon/MonitorStore.cc
 mon_store_converter_LDFLAGS = ${AM_LDFLAGS}
 mon_store_converter_LDADD =  $(LIBOS_LDA) $(LIBGLOBAL_LDA)
-mon_store_converter_CXXFLAGS = ${AM_CXXFLAGS} \
-	-I$(top_srcdir)/src/leveldb/include
+mon_store_converter_CXXFLAGS = ${AM_CXXFLAGS} $(LEVELDB_INCLUDE)
 bin_PROGRAMS += mon_store_converter
 
 
@@ -169,7 +167,7 @@ base: ceph-mon ceph-osd ceph-mds \
 	ceph-syn \
 	rados radosgw librados-config \
 	ceph-conf monmaptool osdmaptool crushtool ceph-authtool \
-	init-ceph mkcephfs
+	init-ceph mkcephfs mon_store_converter
 
 
 # fuse targets?
