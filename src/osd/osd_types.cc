@@ -2447,7 +2447,7 @@ ps_t object_info_t::legacy_object_locator_to_ps(const object_t &oid,
 
 void object_info_t::encode(bufferlist& bl) const
 {
-  ENCODE_START(10, 8, bl);
+  ENCODE_START(11, 8, bl);
   ::encode(soid, bl);
   ::encode(oloc, bl);
   ::encode(category, bl);
@@ -2471,7 +2471,7 @@ void object_info_t::encode(bufferlist& bl) const
 
 void object_info_t::decode(bufferlist::iterator& bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(10, 8, 8, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(11, 8, 8, bl);
   if (struct_v >= 2 && struct_v <= 5) {
     sobject_t obj;
     ::decode(obj, bl);
@@ -2505,7 +2505,19 @@ void object_info_t::decode(bufferlist::iterator& bl)
   else
     lost = false;
   if (struct_v >= 4) {
-    ::decode(watchers, bl);
+    if (struct_v >= 11) {
+      ::decode(watchers, bl);
+    } else {
+      map<entity_name_t, watch_info_t> old_watchers;
+      ::decode(old_watchers, bl);
+      for (map<entity_name_t, watch_info_t>::iterator i = old_watchers.begin();
+	   i != old_watchers.end();
+	   ++i) {
+	watchers.insert(
+	  make_pair(
+	    make_pair(i->second.cookie, i->first), i->second));
+      }
+    }
     ::decode(user_version, bl);
   }
   if (struct_v >= 9)
@@ -2540,9 +2552,10 @@ void object_info_t::dump(Formatter *f) const
   f->dump_unsigned("truncate_seq", truncate_seq);
   f->dump_unsigned("truncate_size", truncate_size);
   f->open_object_section("watchers");
-  for (map<entity_name_t,watch_info_t>::const_iterator p = watchers.begin(); p != watchers.end(); ++p) {
+  for (map<pair<uint64_t, entity_name_t>,watch_info_t>::const_iterator p =
+         watchers.begin(); p != watchers.end(); ++p) {
     stringstream ss;
-    ss << p->first;
+    ss << p->first.second;
     f->open_object_section(ss.str().c_str());
     p->second.dump(f);
     f->close_section();
