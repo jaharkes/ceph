@@ -117,19 +117,20 @@ void OSDMonitor::update_from_paxos()
 
   // walk through incrementals
   MonitorDBStore::Transaction t;
-  bufferlist bl;
   while (version > osdmap.epoch) {
-    int err = get_version(osdmap.epoch+1, bl);
+    bufferlist inc_bl;
+    int err = get_version(osdmap.epoch+1, inc_bl);
     assert(err == 0);
+    assert(inc_bl.length());
     
     dout(7) << "update_from_paxos  applying incremental " << osdmap.epoch+1 << dendl;
-    OSDMap::Incremental inc(bl);
+    OSDMap::Incremental inc(inc_bl);
     osdmap.apply_incremental(inc);
 
     // write out the full map for all past epochs
-    bl.clear();
-    osdmap.encode(bl);
-    put_version_full(&t, osdmap.epoch, bl);
+    bufferlist full_bl;
+    osdmap.encode(full_bl);
+    put_version_full(&t, osdmap.epoch, full_bl);
 
     // share
     dout(1) << osdmap << dendl;
