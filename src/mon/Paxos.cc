@@ -1138,7 +1138,7 @@ bool Paxos::is_readable(version_t v)
     (is_active() || is_updating()) &&
     last_committed > 0 &&           // must have a value
     (mon->get_quorum().size() == 1 ||  // alone, or
-     ceph_clock_now(g_ceph_context) < lease_expire);    // have lease
+     is_lease_valid()); // have lease
 }
 
 bool Paxos::read(version_t v, bufferlist &bl)
@@ -1156,17 +1156,20 @@ version_t Paxos::read_current(bufferlist &bl)
 }
 
 
-
+bool Paxos::is_lease_valid()
+{
+  return ((mon->get_quorum().size() == 1)
+      || (ceph_clock_now(g_ceph_context) < lease_expire));
+}
 
 // -- WRITE --
 
 bool Paxos::is_writeable()
 {
-  if (mon->get_quorum().size() == 1) return true;
   return
     mon->is_leader() &&
     is_active() &&
-    ceph_clock_now(g_ceph_context) < lease_expire;
+    is_lease_valid();
 }
 
 void Paxos::list_proposals(ostream& out)

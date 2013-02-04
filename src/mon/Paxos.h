@@ -1245,9 +1245,7 @@ public:
    *
    * @returns true if the lease is still valid; false otherwise.
    */
-  bool is_lease_valid() {
-    return (ceph_clock_now(g_ceph_context) < lease_expire);
-  }
+  bool is_lease_valid();
   // write
   /**
    * @defgroup Paxos_h_write_funcs Write-related functions
