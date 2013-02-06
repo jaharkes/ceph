@@ -94,7 +94,10 @@ void LogMonitor::create_initial()
 
 void LogMonitor::update_from_paxos()
 {
+  dout(10) << __func__ << dendl;
   version_t version = get_version();
+  dout(10) << __func__ << " version " << version
+           << " summary v " << summary.version << dendl;
   if (version == summary.version)
     return;
   assert(version >= summary.version);
@@ -102,6 +105,7 @@ void LogMonitor::update_from_paxos()
   bufferlist blog;
 
   version_t latest_full = get_version_latest_full();
+  dout(10) << __func__ << " latest full " << latest_full << dendl;
   if ((latest_full > 0) && (latest_full > summary.version)) {
       bufferlist latest_bl;
       get_version_full(latest_full, latest_bl);
@@ -117,6 +121,7 @@ void LogMonitor::update_from_paxos()
     bufferlist bl;
     int err = get_version(summary.version+1, bl);
     assert(err == 0);
+    assert(bl.length());
 
     bufferlist::iterator p = bl.begin();
     __u8 v;
