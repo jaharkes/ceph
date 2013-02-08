@@ -169,6 +169,7 @@ void PGMonitor::update_from_paxos()
     bufferlist bl;
     int err = get_version(pg_map.version+1, bl);
     assert(err == 0);
+    assert(bl.length());
 
     dout(7) << "update_from_paxos  applying incremental " << pg_map.version+1 << dendl;
     PGMap::Incremental inc;
