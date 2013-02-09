@@ -1469,6 +1469,7 @@ void Monitor::handle_sync_finish_reply(MMonSync *m)
   sync_leader->cancel_timeout();
   sync_leader.reset();
 
+  paxos->reapply_all_versions();
 
   MonitorDBStore::Transaction t;
   t.erase("mon_sync", "in_sync");
