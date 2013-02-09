@@ -513,6 +513,7 @@ private:
      * to obtain the store's chunks and pack them to the sync requester.
      */
     MonitorDBStore::Synchronizer synchronizer;
+    MonitorDBStore::Synchronizer paxos_synchronizer;
     /* Should only be used for debugging purposes */
     /**
      * crc of the contents read from the store.
@@ -555,6 +556,14 @@ private:
       }
     }
     /**
+     * Obtain the paxos version at which this sync started.
+     *
+     * @returns Paxos version at which this sync started
+     */
+    version_t get_version() {
+      return version;
+    }
+    /**
      * Set a timeout event for this sync entity.
      *
      * @param event Timeout class to be called after @p fire_after seconds.
@@ -589,6 +598,12 @@ private:
     void sync_init() {
       sync_state = STATE_WHOLE;
       set<string> sync_targets = mon->get_sync_targets_names();
+
+      string prefix("paxos");
+      paxos_synchronizer = mon->store->get_synchronizer(prefix);
+      version = mon->paxos->get_version();
+      generic_dout(10) << __func__ << " version " << version << dendl;
+
       synchronizer = mon->store->get_synchronizer(last_received_key,
 						  sync_targets);
       sync_update();
@@ -605,13 +620,13 @@ private:
     void sync_update() {
       assert(sync_state != STATE_NONE);
       assert(synchronizer.use_count() != 0);
-      
+
       if (!synchronizer->has_next_chunk()) {
 	crc_set(synchronizer->crc());
 	if (sync_state == STATE_WHOLE) {
+          assert(paxos_synchronizer.use_count() != 0);
 	  sync_state = STATE_PAXOS;
-	  string prefix("paxos");
-	  synchronizer = mon->store->get_synchronizer(prefix);
+          synchronizer = paxos_synchronizer;
 	}
       }
     }

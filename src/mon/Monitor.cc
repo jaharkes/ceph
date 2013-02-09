@@ -1094,6 +1094,7 @@ void Monitor::sync_send_chunks(SyncEntity sync)
 
   if (!sync->synchronizer->has_next_chunk()) {
     msg->flags |= MMonSync::FLAG_LAST;
+    msg->version = sync->get_version();
     sync->synchronizer.reset();
   }
 
@@ -1368,6 +1369,8 @@ void Monitor::handle_sync_chunk(MMonSync *m)
   bool stop = false;
   if (m->flags & MMonSync::FLAG_LAST) {
     msg->flags |= MMonSync::FLAG_LAST;
+    assert(m->version > 0);
+    tx.put(paxos->get_name(), "last_committed", m->version);
     stop = true;
   }
   assert(g_conf->mon_sync_requester_kill_at != 8);
