@@ -1008,6 +1008,9 @@ public:
 
   void dispatch(PaxosServiceMessage *m);
 
+  void reapply_all_versions();
+  void apply_version(MonitorDBStore::Transaction &tx, version_t v);
+
   void init();
   /**
    * This function runs basic consistency checks. Importantly, if
