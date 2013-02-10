@@ -67,14 +67,14 @@ void Paxos::reapply_all_versions()
 
   MonitorDBStore::Transaction tx;
   for (version_t v = first; v <= last; ++v) {
-    dout(20) << __func__ << " apply version " << v << dendl;
+    dout(30) << __func__ << " apply version " << v << dendl;
     apply_version(tx, v);
   }
+  dout(15) << __func__ << " total versions " << (last-first) << dendl;
 
-  dout(10) << __func__ << " " << tx.size() << " ops in tx" << dendl;
   JSONFormatter f(true);
   tx.dump(&f);
-  dout(20) << __func__ << " tx dump:\n";
+  dout(30) << __func__ << " tx dump:\n";
   f.flush(*_dout);
   *_dout << dendl;
 
