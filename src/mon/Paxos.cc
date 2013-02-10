@@ -70,7 +70,14 @@ void Paxos::reapply_all_versions()
     dout(20) << __func__ << " apply version " << v << dendl;
     apply_version(tx, v);
   }
+
   dout(10) << __func__ << " " << tx.size() << " ops in tx" << dendl;
+  JSONFormatter f(true);
+  tx.dump(&f);
+  dout(20) << __func__ << " tx dump:\n";
+  f.flush(*_dout);
+  *_dout << dendl;
+
   get_store()->apply_transaction(tx);
 }
 
