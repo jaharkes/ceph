@@ -737,12 +737,18 @@ void Monitor::handle_sync_start(MMonSync *m)
 {
   dout(10) << __func__ << " " << *m << dendl;
 
+  if (quorum.size() == 0) {
+    dout(1) << __func__ << " we are not in quorum; ignore." << dendl;
+    m->put();
+    return;
+  }
+
   /* If we are not the leader, then some monitor picked us as the point of
    * entry to the quorum during its synchronization process. Therefore, we
    * have an obligation of forwarding this message to leader, so the sender
    * can start synchronizing.
    */
-  if (!is_leader() && (quorum.size() > 0)) {
+  if (!is_leader()) {
     entity_inst_t leader = monmap->get_inst(get_leader());
     MMonSync *msg = new MMonSync(m);
     msg->reply_to = m->get_source_inst();
@@ -1694,78 +1700,74 @@ void Monitor::handle_probe_reply(MMonProbe *m)
     }
   }
 
+  assert(paxos != NULL);
+
+  if (is_synchronizing()) {
+    dout(10) << " we are currently synchronizing, so that will continue."
+             << dendl;
+    m->put();
+    return;
+  }
+
+  entity_inst_t other = m->get_source_inst();
   // is there an existing quorum?
   if (m->quorum.size()) {
     dout(10) << " existing quorum " << m->quorum << dendl;
 
-    assert(paxos != NULL);
-    // do i need to catch up?
-    bool ok = true;
-    if (is_synchronizing()) {
-      dout(10) << "We are currently synchronizing, so that will continue."
-	<< " Peer has versions [" << m->paxos_first_version
-	<< "," << m->paxos_last_version << "]" << dendl;
-      m->put();
-      return;
-    } else if (paxos->get_version() + g_conf->paxos_max_join_drift < m->paxos_last_version) {
+    if (paxos->get_version() + g_conf->paxos_max_join_drift < m->paxos_last_version) {
       dout(10) << " peer paxos version " << m->paxos_last_version
 	       << " vs my version " << paxos->get_version()
 	       << " (too far ahead)"
 	       << dendl;
-      ok = false;
-    } else {
-      dout(10) << " peer paxos version " << m->paxos_last_version
-	<< " vs my version " << paxos->get_version()
-	<< " (ok)"
-	<< dendl;
+      sync_start(other);
+      m->put();
+      return;
     }
-    if (ok) {
-      if (monmap->contains(name) &&
-	  !monmap->get_addr(name).is_blank_ip()) {
-	// i'm part of the cluster; just initiate a new election
-	start_election();
-      } else {
-	dout(10) << " ready to join, but i'm not in the monmap or my addr is blank, trying to join" << dendl;
-	messenger->send_message(new MMonJoin(monmap->fsid, name, messenger->get_myaddr()),
-				monmap->get_inst(*m->quorum.begin()));
-      }
+    dout(10) << " peer paxos version " << m->paxos_last_version
+             << " vs my version " << paxos->get_version()
+             << " (ok)"
+             << dendl;
+
+    if (monmap->contains(name) &&
+        !monmap->get_addr(name).is_blank_ip()) {
+      // i'm part of the cluster; just initiate a new election
+      start_election();
     } else {
-      entity_inst_t source = m->get_source_inst();
-      sync_start(source);
+      dout(10) << " ready to join, but i'm not in the monmap or my addr is blank, trying to join" << dendl;
+      messenger->send_message(new MMonJoin(monmap->fsid, name, messenger->get_myaddr()),
+                              monmap->get_inst(*m->quorum.begin()));
     }
   } else {
-    // check if our store is enough up-to-date so that forming a quorum
-    // actually works. Otherwise, we'd be entering a world of pain and
-    // out-of-date states -- this can happen, for instance, if only one
-    // mon is up, and we are starting fresh.
-    entity_inst_t other = m->get_source_inst();
-    if (m->paxos_first_version > paxos->get_version()) {
-      sync_start(other);
-    } else if (paxos->get_first_committed() > m->paxos_last_version) {
-      dout(10) << __func__ << " waiting for " << other
-	<< " to sync with us (our fc: "
-	<< paxos->get_first_committed() << "; theirs lc: "
-	<< m->paxos_last_version << ")" << dendl;
+    if (monmap->contains(m->name)) {
+      dout(10) << " mon." << m->name << " is outside the quorum" << dendl;
+      outside_quorum.insert(m->name);
     } else {
-      // not part of a quorum
-      if (monmap->contains(m->name))
-	outside_quorum.insert(m->name);
-      else
-	dout(10) << " mostly ignoring mon." << m->name << ", not part of monmap" << dendl;
+      dout(10) << " mostly ignoring mon." << m->name << ", not part of monmap" << dendl;
+      m->put();
+      return;
+    }
 
-      unsigned need = monmap->size() / 2 + 1;
-      dout(10) << " outside_quorum now " << outside_quorum << ", need " << need << dendl;
+    if (paxos->get_version() + g_conf->paxos_max_join_drift < m->paxos_last_version) {
+      dout(10) << " peer paxos version " << m->paxos_last_version
+	       << " vs my version " << paxos->get_version()
+	       << " (too far ahead)"
+	       << dendl;
+      sync_start(other);
+      m->put();
+      return;
+    }
 
-      if (outside_quorum.size() >= need) {
-	if (outside_quorum.count(name)) {
-	  dout(10) << " that's enough to form a new quorum, calling election" << dendl;
-	  start_election();
-	} else {
-	  dout(10) << " that's enough to form a new quorum, but it does not include me; waiting" << dendl;
-	}
+    unsigned need = monmap->size() / 2 + 1;
+    dout(10) << " outside_quorum now " << outside_quorum << ", need " << need << dendl;
+    if (outside_quorum.size() >= need) {
+      if (outside_quorum.count(name)) {
+        dout(10) << " that's enough to form a new quorum, calling election" << dendl;
+        start_election();
       } else {
-	dout(10) << " that's not yet enough for a new quorum, waiting" << dendl;
+        dout(10) << " that's enough to form a new quorum, but it does not include me; waiting" << dendl;
       }
+    } else {
+	dout(10) << " that's not yet enough for a new quorum, waiting" << dendl;
     }
   }
   m->put();
