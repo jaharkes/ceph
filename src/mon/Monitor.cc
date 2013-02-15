@@ -693,15 +693,22 @@ set<string> Monitor::get_sync_targets_names() {
 /**
  * Reset any lingering sync/trim informations we might have.
  */
-void Monitor::reset_sync()
+void Monitor::reset_sync(bool abort)
 {
   dout(10) << __func__ << dendl;
   // clear everything trim/sync related
   {
     map<entity_inst_t,Context*>::iterator iter = trim_timeouts.begin();
     for (; iter != trim_timeouts.end(); ++iter) {
-      if ((*iter).second)
-	timer.cancel_event((*iter).second);
+      if (!iter->second)
+        continue;
+
+      timer.cancel_event(iter->second);
+      if (abort) {
+        MMonSync *msg = new MMonSync(MMonSync::OP_ABORT);
+        entity_inst_t other = iter->first;
+        messenger->send_message(msg, other);
+      }
     }
     trim_timeouts.clear();
   }
@@ -737,18 +744,15 @@ void Monitor::handle_sync_start(MMonSync *m)
 {
   dout(10) << __func__ << " " << *m << dendl;
 
-  if (quorum.size() == 0) {
-    dout(1) << __func__ << " we are not in quorum; ignore." << dendl;
-    m->put();
-    return;
-  }
-
   /* If we are not the leader, then some monitor picked us as the point of
    * entry to the quorum during its synchronization process. Therefore, we
    * have an obligation of forwarding this message to leader, so the sender
    * can start synchronizing.
    */
-  if (!is_leader()) {
+  if (!is_leader() && quorum.size() > 0) {
+    assert(!(sync_role & SYNC_ROLE_REQUESTER));
+    assert(!(sync_role & SYNC_ROLE_LEADER));
+
     entity_inst_t leader = monmap->get_inst(get_leader());
     MMonSync *msg = new MMonSync(m);
     msg->reply_to = m->get_source_inst();
@@ -758,8 +762,41 @@ void Monitor::handle_sync_start(MMonSync *m)
     assert(g_conf->mon_sync_provider_kill_at != 1);
     messenger->send_message(msg, leader);
     assert(g_conf->mon_sync_provider_kill_at != 2);
+    m->put();
     return;
   }
+
+  // If we are a requester, then it means that we know someone who is in the
+  // quorum, either because we were lucky enough to contact them in the first
+  // place or we managed to contact someone who knew who they were. Therefore,
+  // just forward this request to our sync leader.
+  if (sync_role & SYNC_ROLE_REQUESTER) {
+    assert(is_synchronizing());
+    assert(!(sync_role & SYNC_ROLE_LEADER));
+    assert(!(sync_role & SYNC_ROLE_PROVIDER));
+    assert(quorum.size() == 0);
+
+    dout(10) << __func__ << " forward " << *m
+             << " to our sync leader at "
+             << sync_leader->entity << dendl;
+
+    MMonSync *msg = new MMonSync(m);
+    msg->reply_to = m->get_source_inst();
+    msg->flags |= MMonSync::FLAG_REPLY_TO;
+    messenger->send_message(msg, sync_leader->entity);
+    m->put();
+    return;
+  }
+
+  // At this point we may or may not be the leader.  If we are not the leader,
+  // it means that we are not in the quorum, but someone would still very much
+  // like to synchronize with us.  In certain circumstances, letting them
+  // synchronize with us is by far our only option -- for instance, when we
+  // need them to form a quorum and they have started fresh or are severely
+  // out of date --, but it won't hurt to let them sync from us anyway: if
+  // they chose us, then they must have noticed that we had a higher version
+  // than they do, so it makes sense to let them try their luck and join the
+  // party.
 
   Mutex::Locker l(trim_lock);
   entity_inst_t other =
@@ -1175,6 +1212,20 @@ void Monitor::sync_start(entity_inst_t &other)
   if ((state == STATE_SYNCHRONIZING) && (sync_role == SYNC_ROLE_REQUESTER)) {
     dout(1) << __func__ << " already synchronizing; drop it" << dendl;
     return;
+  }
+
+  // Looks like we are the acting leader for someone.  Better force them to
+  // abort their endeavours.  After all, if they are trying to sync from us,
+  // it means that we must have a higher paxos version than the one they
+  // have; however, if we are trying to sync as well, it must mean that
+  // someone has a higher version than the one we have.  Everybody wins if
+  // we force them to cancel their sync and try again.
+  if (sync_role & SYNC_ROLE_LEADER) {
+    dout(10) << __func__ << " we are acting as a leader to someone; "
+             << "destroy their dreams" << dendl;
+
+    assert(trim_timeouts.size() > 0);
+    reset_sync();
   }
 
   assert(sync_role == SYNC_ROLE_NONE);

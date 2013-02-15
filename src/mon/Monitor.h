@@ -230,7 +230,7 @@ private:
   /**
    * Reset the monitor's sync-related data structures and state.
    */
-  void reset_sync();
+  void reset_sync(bool abort = false);
 
   /**
    * @defgroup Synchronization_Roles
