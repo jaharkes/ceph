@@ -836,6 +836,33 @@ void Monitor::handle_sync_start(MMonSync *m)
     sync_role |= SYNC_ROLE_LEADER;
 
     paxos->trim_disable();
+
+    // Is the one that contacted us in the quorum?
+    if (quorum.count(m->get_source().num())) {
+      // Then it must have been a forwarded message from someone else
+      assert(m->flags & MMonSync::FLAG_REPLY_TO);
+      // And must not be synchronizing. What sense would that make, eh?
+      assert(trim_timeouts.count(m->get_source_inst()) == 0);
+      // Set the provider as the one that contacted us. He's in the
+      // quorum, so he's up to the job (i.e., he's not synchronizing)
+      msg->set_reply_to(m->get_source_inst());
+      dout(10) << __func__ << " set provider to " << msg->reply_to << dendl;
+    } else if (quorum.size() > 0) {
+      // grab someone from the quorum and assign them as the sync provider
+      int n = _pick_random_quorum_mon(rank);
+      if (n >= 0) {
+        msg->set_reply_to(monmap->get_inst(n));
+        dout(10) << __func__ << " set quorum-based provider to "
+                 << msg->reply_to << dendl;
+      } else {
+        assert(0 == "We shouldn't get here!");
+      }
+    } else {
+      // There is no quorum, so we must either be in a quorum-less cluster,
+      // or we must be mid-election.  Either way, tell them it is okay to
+      // sync from us by not setting the reply-to field.
+      assert(!(msg->flags & MMonSync::FLAG_REPLY_TO));
+    }
   }
   messenger->send_message(msg, other);
   m->put();
@@ -973,6 +1000,19 @@ string Monitor::_pick_random_mon(int other)
   if (other >= 0 && n >= other)
     n++;
   return monmap->get_name(n);
+}
+
+int Monitor::_pick_random_quorum_mon(int other)
+{
+  assert(monmap->size() > 0);
+  if (quorum.size() == 0)
+    return -1;
+  set<int>::iterator p = quorum.begin();
+  for (int n = sync_rng() % quorum.size(); p != quorum.end() && n; ++p, --n);
+  if (other >= 0 && p != quorum.end() && *p == other)
+    ++p;
+
+  return (p == quorum.end() ? *(quorum.rbegin()) : *p);
 }
 
 void Monitor::sync_timeout(entity_inst_t &entity)
@@ -1339,7 +1379,7 @@ void Monitor::handle_sync_start_reply(MMonSync *m)
   // We now know for sure who the leader is.
   sync_leader->entity = other;
   sync_leader->cancel_timeout();
-  
+
   if (m->flags & MMonSync::FLAG_RETRY) {
     dout(10) << __func__ << " retrying sync at a later time" << dendl;
     sync_role = SYNC_ROLE_NONE;
@@ -1347,6 +1387,15 @@ void Monitor::handle_sync_start_reply(MMonSync *m)
     sync_leader->set_timeout(new C_SyncStartRetry(this, sync_leader->entity),
 			     g_conf->mon_sync_backoff_timeout);
     goto out;
+  }
+
+  if (m->flags & MMonSync::FLAG_REPLY_TO) {
+    dout(10) << __func__ << " leader told us to use " << m->reply_to
+             << " as sync provider" << dendl;
+    sync_provider->entity = m->reply_to;
+  } else {
+    dout(10) << __func__ << " synchronizing from leader at " << other << dendl;
+    sync_provider->entity = other;
   }
 
   sync_leader->set_timeout(new C_HeartbeatTimeout(this),
