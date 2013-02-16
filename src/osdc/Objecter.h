@@ -1421,6 +1421,22 @@ private:
     return op_submit(o);
   }
 
+  tid_t listwatchers(const object_t& oid, const object_locator_t& oloc,
+	     snapid_t snap, bufferlist *pbl, int flags,
+	     Context *onfinish,
+	     eversion_t *objver = NULL, ObjectOperation *extra_ops = NULL) {
+    vector<OSDOp> ops;
+    int i = init_ops(ops, 1, extra_ops);
+    ops[i].op.op = CEPH_OSD_OP_LIST_WATCHERS;
+    //XXX: Create another union struct with just value_len?
+    ops[i].op.xattr.name_len = 0;
+    ops[i].op.xattr.value_len = 0;
+    Op *o = new Op(oid, oloc, ops, flags | global_op_flags | CEPH_OSD_FLAG_READ, onfinish, 0, objver);
+    o->snapid = snap;
+    o->outbl = pbl;
+    return op_submit(o);
+  }
+
   void list_objects(ListContext *p, Context *onfinish);
 
   // -------------------------

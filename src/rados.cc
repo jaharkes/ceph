@@ -95,6 +95,7 @@ void usage(ostream& out)
 "   rmomapkey <obj-name> <key>\n"
 "   getomapheader <obj-name>\n"
 "   setomapheader <obj-name> <val>\n"
+"   listwatchers <obj-name>          list the watchers of this object\n"
 "\n"
 "IMPORT AND EXPORT\n"
 "   import [options] <local-directory> <rados-pool>\n"
@@ -2001,6 +2002,34 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
       formatter = new JSONFormatter(pretty_format);
     }
     ret = do_lock_cmd(nargs, opts, &io_ctx, formatter);
+  } else if (strcmp(nargs[0], "listwatchers") == 0) {
+    if (!pool_name || nargs.size() < 2)
+      usage_exit();
+
+    string oid(nargs[1]);
+
+    bufferlist bl;
+    ret = io_ctx.listwatchers(oid, bl);
+    if (ret < 0) {
+      cerr << "error listing watchers " << pool_name << "/" << oid << ": " << strerror_r(-ret, buf, sizeof(buf)) << std::endl;
+      return 1;
+    }
+    else
+      ret = 0;
+    
+    int count;
+    bufferlist::iterator p = bl.begin();
+    bufferlist info;
+    ::decode(count, p);
+    ::decode(info, p);
+    p = info.begin();
+    for (int i = 0 ; i < count ; i++) {
+      uint64_t cookie;
+      uint64_t num;
+      ::decode(num, p);
+      ::decode(cookie, p);
+      cout << "num=" << num << " cookie=" << cookie << std::endl;
+    }
   } else {
     cerr << "unrecognized command " << nargs[0] << std::endl;
     usage_exit();

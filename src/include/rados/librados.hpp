@@ -504,6 +504,8 @@ namespace librados
     void set_assert_version(uint64_t ver);
     void set_assert_src_version(const std::string& o, uint64_t ver);
 
+    int listwatchers(const std::string& oid, bufferlist& bl);
+
     const std::string& get_pool_name() const;
 
     void locator_set_key(const std::string& key);

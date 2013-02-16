@@ -686,6 +686,12 @@ int librados::IoCtx::getxattr(const std::string& oid, const char *name, bufferli
   return io_ctx_impl->getxattr(obj, name, bl);
 }
 
+int librados::IoCtx::listwatchers(const std::string& oid, bufferlist& bl)
+{
+  object_t obj(oid);
+  return io_ctx_impl->listwatchers(obj, bl);
+}
+
 int librados::IoCtx::getxattrs(const std::string& oid, map<std::string, bufferlist>& attrset)
 {
   object_t obj(oid);

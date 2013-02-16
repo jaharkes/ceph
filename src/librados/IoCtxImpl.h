@@ -139,6 +139,8 @@ struct librados::IoCtxImpl {
   int aio_operate(const object_t& oid, ::ObjectOperation *o, AioCompletionImpl *c);
   int aio_operate_read(const object_t& oid, ::ObjectOperation *o, AioCompletionImpl *c, bufferlist *pbl);
 
+  int listwatchers(const object_t& oid, bufferlist& bl);
+
   struct C_aio_Ack : public Context {
     librados::AioCompletionImpl *c;
     C_aio_Ack(AioCompletionImpl *_c);
