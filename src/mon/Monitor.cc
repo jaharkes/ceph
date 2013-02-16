@@ -752,11 +752,15 @@ void Monitor::handle_sync_start(MMonSync *m)
   if (!is_leader() && quorum.size() > 0) {
     assert(!(sync_role & SYNC_ROLE_REQUESTER));
     assert(!(sync_role & SYNC_ROLE_LEADER));
+    assert(!is_synchronizing());
 
     entity_inst_t leader = monmap->get_inst(get_leader());
     MMonSync *msg = new MMonSync(m);
-    msg->reply_to = m->get_source_inst();
-    msg->flags |= MMonSync::FLAG_REPLY_TO;
+    // keep forwarding the message up the chain if it has already been
+    // forwarded.
+    if (!(m->flags & MMonSync::FLAG_REPLY_TO)) {
+      msg->set_reply_to(m->get_source_inst());
+    }
     dout(10) << __func__ << " forward " << *m
 	     << " to leader at " << leader << dendl;
     assert(g_conf->mon_sync_provider_kill_at != 1);
@@ -766,23 +770,32 @@ void Monitor::handle_sync_start(MMonSync *m)
     return;
   }
 
-  // If we are a requester, then it means that we know someone who is in the
-  // quorum, either because we were lucky enough to contact them in the first
-  // place or we managed to contact someone who knew who they were. Therefore,
-  // just forward this request to our sync leader.
-  if (sync_role & SYNC_ROLE_REQUESTER) {
-    assert(is_synchronizing());
+  // If we are synchronizing, then it means that we know someone who has a
+  // higher version than the one we have; and if someone attempted to sync
+  // from us, then that must mean they have a lower version than us.
+  // Therefore, they must be much more interested in synchronizing from the
+  // one we are trying to synchronize from than they are from us.
+  // Moreover, if we are already synchronizing under the REQUESTER role, then
+  // we must know someone who is in the quorum, either because we were lucky
+  // enough to contact them in the first place or we managed to contact
+  // someone who knew who they were. Therefore, just forward this request to
+  // our sync leader.
+  if (is_synchronizing()) {
     assert(!(sync_role & SYNC_ROLE_LEADER));
     assert(!(sync_role & SYNC_ROLE_PROVIDER));
     assert(quorum.size() == 0);
+    assert(sync_leader.get() != NULL);
 
     dout(10) << __func__ << " forward " << *m
              << " to our sync leader at "
              << sync_leader->entity << dendl;
 
     MMonSync *msg = new MMonSync(m);
-    msg->reply_to = m->get_source_inst();
-    msg->flags |= MMonSync::FLAG_REPLY_TO;
+    // keep forwarding the message up the chain if it has already been
+    // forwarded.
+    if (!(m->flags & MMonSync::FLAG_REPLY_TO)) {
+      msg->set_reply_to(m->get_source_inst());
+    }
     messenger->send_message(msg, sync_leader->entity);
     m->put();
     return;
