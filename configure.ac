@@ -413,7 +413,7 @@ AM_CONDITIONAL(WITH_OCF, [ test "$with_ocf" = "yes" ])
 AC_ARG_WITH([system-leveldb],
 	[AS_HELP_STRING([--with-system-leveldb], [use system leveldb])],
 	,
-	[with_system_leveldb=no])
+	[with_system_leveldb=yes])
 AS_IF([test "x$with_system_leveldb" = xyes],
 	    [AC_CHECK_LIB([leveldb], [leveldb_open], [], [AC_MSG_FAILURE([libleveldb not found])], [-lsnappy -lpthread])])
 AS_IF([test "x$with_system_leveldb" = xcheck],
