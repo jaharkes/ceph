@@ -1088,6 +1088,7 @@ void Monitor::sync_provider_cleanup(entity_inst_t &entity)
 void Monitor::handle_sync_start_chunks(MMonSync *m)
 {
   dout(10) << __func__ << " " << *m << dendl;
+  assert(!(sync_role & SYNC_ROLE_REQUESTER));
 
   entity_inst_t other = m->get_source_inst();
 
