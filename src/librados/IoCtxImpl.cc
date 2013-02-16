@@ -1268,6 +1268,39 @@ int librados::IoCtxImpl::getxattr(const object_t& oid,
   return bl.length();
 }
 
+int librados::IoCtxImpl::listwatchers(const object_t& oid,
+				    bufferlist& bl)
+{
+  Mutex mylock("IoCtxImpl::listwatchers::mylock");
+  Cond cond;
+  bool done;
+  int r;
+  Context *onack = new C_SafeCond(&mylock, &cond, &done, &r);
+  eversion_t ver;
+
+  ::ObjectOperation op;
+  ::ObjectOperation *pop = prepare_assert_ops(&op);
+
+  lock->Lock();
+  objecter->listwatchers(oid, oloc,
+		     snap_seq, &bl, 0,
+		     onack, &ver, pop);
+  lock->Unlock();
+
+  mylock.Lock();
+  while (!done)
+    cond.Wait(mylock);
+  mylock.Unlock();
+  ldout(client->cct, 10) << "Objecter returned from listwatchers" << dendl;
+
+  set_sync_op_version(ver);
+
+  if (r < 0)
+    return r;
+
+  return bl.length();
+}
+
 int librados::IoCtxImpl::rmxattr(const object_t& oid, const char *name)
 {
   utime_t ut = ceph_clock_now(client->cct);
