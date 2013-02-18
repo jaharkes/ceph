@@ -413,7 +413,7 @@ void Paxos::handle_last(MMonPaxos *last)
       if (uncommitted_v == last_committed+1 &&
 	  uncommitted_value.length()) {
 	dout(10) << "that's everyone.  begin on old learned value" << dendl;
-	state = STATE_PREPARING;
+	state = STATE_PREPARING | STATE_LOCKED;
 	begin(uncommitted_value);
       } else {
 	// active!
@@ -451,8 +451,9 @@ void Paxos::begin(bufferlist& v)
 	   << dendl;
 
   assert(mon->is_leader());
-  assert(state == STATE_PREPARING);
-  state = STATE_UPDATING;
+  assert(is_preparing());
+  state &= ~STATE_PREPARING;
+  state |= STATE_UPDATING;
 
   // we must already have a majority for this to work.
   assert(mon->get_quorum().size() == 1 ||
@@ -583,7 +584,7 @@ void Paxos::handle_accept(MMonPaxos *accept)
   assert(accept->last_committed == last_committed ||   // not committed
 	 accept->last_committed == last_committed-1);  // committed
 
-  assert(state == STATE_UPDATING);
+  assert(is_updating());
   assert(accepted.count(from) == 0);
   accepted.insert(from);
   dout(10) << " now " << accepted << " have accepted" << dendl;
