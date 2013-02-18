@@ -451,6 +451,7 @@ public:
    */
   bool is_active() {
     return (!is_proposing() && !paxos->is_recovering()
+        && !paxos->is_locked()
 	&& !paxos->is_bootstrapping());
   }
 
@@ -474,7 +475,7 @@ public:
   bool is_readable(version_t ver = 0) {
     if ((ver > get_last_committed())
 	|| ((!mon->is_peon() && !mon->is_leader()))
-	|| (is_proposing() || paxos->is_recovering())
+	|| (is_proposing() || paxos->is_recovering() || paxos->is_locked())
 	|| (get_last_committed() <= 0)
 	|| ((mon->get_quorum().size() != 1) && !paxos->is_lease_valid())) {
       return false;
@@ -496,6 +497,7 @@ public:
    */
   bool is_writeable() {
     return (!is_proposing() && mon->is_leader()
+        && !paxos->is_locked()
 	&& paxos->is_lease_valid() && !paxos->is_bootstrapping());
   }
 
