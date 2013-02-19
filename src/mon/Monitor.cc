@@ -4099,7 +4099,6 @@ void Monitor::StoreConverter::_convert_monitor()
   vector<string> keys;
   keys.push_back("magic");
   keys.push_back("feature_set");
-  keys.push_back("election_epoch");
   keys.push_back("cluster_uuid");
 
   vector<string>::iterator it;
@@ -4112,6 +4111,8 @@ void Monitor::StoreConverter::_convert_monitor()
     assert(r > 0);
     tx.put(MONITOR_NAME, *it, bl);
   }
+  version_t election_epoch = store->get_int("election_epoch");
+  tx.put(MONITOR_NAME, "election_epoch", election_epoch);
 
   assert(!tx.empty());
   db->apply_transaction(tx);
