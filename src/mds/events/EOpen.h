@@ -27,7 +27,7 @@ public:
   EOpen(MDLog *mdlog) : 
     LogEvent(EVENT_OPEN), metablob(mdlog) { }
 
-  void print(ostream& out) {
+  void print(ostream& out) const {
     out << "EOpen " << metablob << ", " << inos.size() << " open files";
   }
 
@@ -42,21 +42,10 @@ public:
     inos.push_back(ino);
   }
 
-  void encode(bufferlist &bl) const {
-    __u8 struct_v = 2;
-    ::encode(struct_v, bl);
-    ::encode(stamp, bl);
-    ::encode(metablob, bl);
-    ::encode(inos, bl);
-  } 
-  void decode(bufferlist::iterator &bl) {
-    __u8 struct_v;
-    ::decode(struct_v, bl);
-    if (struct_v >= 2)
-      ::decode(stamp, bl);
-    ::decode(metablob, bl);
-    ::decode(inos, bl);
-  }
+  void encode(bufferlist& bl) const;
+  void decode(bufferlist::iterator& bl);
+  void dump(Formatter *f) const;
+  static void generate_test_instances(list<EOpen*>& ls);
 
   void update_segment();
   void replay(MDS *mds);

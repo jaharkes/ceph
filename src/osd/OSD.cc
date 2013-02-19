@@ -139,6 +139,8 @@ static CompatSet get_osd_compat_set() {
   ceph_osd_feature_incompat.insert(CEPH_OSD_FEATURE_INCOMPAT_CATEGORIES);
   ceph_osd_feature_incompat.insert(CEPH_OSD_FEATURE_INCOMPAT_HOBJECTPOOL);
   ceph_osd_feature_incompat.insert(CEPH_OSD_FEATURE_INCOMPAT_BIGINFO);
+  ceph_osd_feature_incompat.insert(CEPH_OSD_FEATURE_INCOMPAT_LEVELDBINFO);
+  ceph_osd_feature_incompat.insert(CEPH_OSD_FEATURE_INCOMPAT_LEVELDBLOG);
   return CompatSet(ceph_osd_feature_compat, ceph_osd_feature_ro_compat,
 		   ceph_osd_feature_incompat);
 }
@@ -147,6 +149,7 @@ OSDService::OSDService(OSD *osd) :
   osd(osd),
   whoami(osd->whoami), store(osd->store), clog(osd->clog),
   pg_recovery_stats(osd->pg_recovery_stats),
+  infos_oid(sobject_t("infos", CEPH_NOSNAP)),
   cluster_messenger(osd->cluster_messenger),
   client_messenger(osd->client_messenger),
   logger(osd->logger),
@@ -922,6 +925,17 @@ int OSD::init()
     delete store;
     return -EINVAL;
   }
+
+  // make sure info object exists
+  if (!store->exists(coll_t::META_COLL, service.infos_oid)) {
+    dout(10) << "init creating/touching infos object" << dendl;
+    ObjectStore::Transaction t;
+    t.touch(coll_t::META_COLL, service.infos_oid);
+    r = store->apply_transaction(t);
+    if (r < 0)
+      return r;
+  }
+
   if (osd_compat.compare(superblock.compat_features) != 0) {
     // We need to persist the new compat_set before we
     // do anything else
@@ -1587,12 +1601,14 @@ void OSD::load_pgs()
 
     dout(10) << "pgid " << pgid << " coll " << coll_t(pgid) << dendl;
     bufferlist bl;
-    epoch_t map_epoch = PG::peek_map_epoch(store, coll_t(pgid), &bl);
+    epoch_t map_epoch = PG::peek_map_epoch(store, coll_t(pgid), service.infos_oid, &bl);
 
     PG *pg = _open_lock_pg(map_epoch == 0 ? osdmap : service.get_map(map_epoch), pgid);
 
     // read pg state, log
     pg->read_state(store, bl);
+
+    pg->check_ondisk_snap_colls(i->second);
 
     set<pg_t> split_pgs;
     if (osdmap->have_pg_pool(pg->info.pgid.pool()) &&
@@ -1616,7 +1632,7 @@ void OSD::load_pgs()
     pg->unlock();
   }
   dout(10) << "load_pgs done" << dendl;
-
+  
   build_past_intervals_parallel();
 }
 
@@ -1727,7 +1743,9 @@ void OSD::build_past_intervals_parallel()
   int num = 0;
   for (map<PG*,pistate>::iterator i = pis.begin(); i != pis.end(); ++i) {
     PG *pg = i->first;
-    pg->write_info(t);
+    pg->dirty_big_info = true;
+    pg->dirty_info = true;
+    pg->write_if_dirty(t);
 
     // don't let the transaction get too big
     if (++num >= g_conf->osd_target_transaction_size) {
@@ -1848,7 +1866,7 @@ void OSD::calc_priors_during(pg_t pgid, epoch_t start, epoch_t end, set<int>& ps
 	  pset.insert(acting[i]);
 	up++;
       }
-    if (!up && acting.size()) {
+    if (!up && !acting.empty()) {
       // sucky.  add down osds, even tho we can't reach them right now.
       for (unsigned i=0; i<acting.size(); i++)
 	if (acting[i] != whoami)
@@ -3074,7 +3092,7 @@ void OSD::do_command(Connection *con, tid_t tid, vector<string>& cmd, bufferlist
 
   dout(20) << "do_command tid " << tid << " " << cmd << dendl;
 
-  if (cmd.size() == 0) {
+  if (cmd.empty()) {
     ss << "no command given";
     goto out;
   }
@@ -3154,7 +3172,7 @@ void OSD::do_command(Connection *con, tid_t tid, vector<string>& cmd, bufferlist
        << (end-start) << " sec at " << prettybyte_t(rate) << "/sec";
   }
 
-  else if (cmd.size() >= 1 && cmd[0] == "flush_pg_stats") {
+  else if (!cmd.empty() && cmd[0] == "flush_pg_stats") {
     flush_pg_stats();
   }
   
@@ -3407,7 +3425,8 @@ bool OSD::heartbeat_dispatch(Message *m)
     break;
 
   default:
-    return false;
+    dout(0) << "dropping unexpected message " << *m << " from " << m->get_source_inst() << dendl;
+    m->put();
   }
 
   return true;
@@ -4281,8 +4300,7 @@ void OSD::advance_pg(
     lastmap = nextmap;
     handle.reset_tp_timeout();
   }
-  if (!is_booting())
-    pg->handle_activate_map(rctx);
+  pg->handle_activate_map(rctx);
 }
 
 /** 
@@ -4668,8 +4686,12 @@ bool OSD::require_same_or_newer_map(OpRequestRef op, epoch_t epoch)
     int from = m->get_source().num();
     if (!osdmap->have_inst(from) ||
 	osdmap->get_cluster_addr(from) != m->get_source_inst().addr) {
-      dout(0) << "from dead osd." << from << ", dropping, sharing map" << dendl;
-      send_incremental_map(epoch, m->get_connection());
+      if (m->get_connection()->has_feature(CEPH_FEATURE_OSD_HBMSGS)) {
+	dout(10) << "from dead osd." << from << ", dropping, sharing map" << dendl;
+	send_incremental_map(epoch, m->get_connection());
+      } else {
+	dout(10) << "from dead osd." << from << ", but it lacks OSD_HBMSGS feature, not sharing map" << dendl;
+      }
       return false;
     }
   }
@@ -4730,6 +4752,8 @@ void OSD::split_pgs(
     dout(10) << "m_seed " << i->ps() << dendl;
     dout(10) << "split_bits is " << split_bits << dendl;
 
+    rctx->transaction->create_collection(
+      coll_t(*i));
     rctx->transaction->split_collection(
       coll_t(parent->info.pgid),
       split_bits,
@@ -4740,6 +4764,8 @@ void OSD::split_pgs(
 	 ++k) {
       for (snapid_t j = k.get_start(); j < k.get_start() + k.get_len();
 	   ++j) {
+	rctx->transaction->create_collection(
+	  coll_t(*i, j));
 	rctx->transaction->split_collection(
 	  coll_t(parent->info.pgid, j),
 	  split_bits,
@@ -4840,7 +4866,7 @@ void OSD::split_pg(PG *parent, map<pg_t,PG*>& children, ObjectStore::Transaction
       object_info_t oi(bv);
 
       t.collection_move(coll_t(pgid), coll_t(parentid), poid);
-      if (oi.snaps.size()) {
+      if (!oi.snaps.empty()) {
 	snapid_t first = oi.snaps[0];
 	t.collection_move(coll_t(pgid, first), coll_t(parentid), poid);
 	if (oi.snaps.size() > 1) {
@@ -5093,11 +5119,13 @@ bool OSD::compat_must_dispatch_immediately(PG *pg)
 
 void OSD::dispatch_context(PG::RecoveryCtx &ctx, PG *pg, OSDMapRef curmap)
 {
-  do_notifies(*ctx.notify_list, curmap);
+  if (service.get_osdmap()->is_up(whoami)) {
+    do_notifies(*ctx.notify_list, curmap);
+    do_queries(*ctx.query_map, curmap);
+    do_infos(*ctx.info_map, curmap);
+  }
   delete ctx.notify_list;
-  do_queries(*ctx.query_map, curmap);
   delete ctx.query_map;
-  do_infos(*ctx.info_map, curmap);
   delete ctx.info_map;
   if ((ctx.on_applied->empty() &&
        ctx.on_safe->empty() &&
@@ -5406,7 +5434,8 @@ void OSD::handle_pg_trim(OpRequestRef op)
       // primary is instructing us to trim
       ObjectStore::Transaction *t = new ObjectStore::Transaction;
       pg->trim(*t, m->trim_to);
-      pg->write_info(*t);
+      pg->dirty_info = true;
+      pg->write_if_dirty(*t);
       int tr = store->queue_transaction(pg->osr.get(), t,
 					new ObjectStore::C_DeleteTransaction(t));
       assert(tr == 0);
@@ -5875,7 +5904,7 @@ void OSD::do_recovery(PG *pg)
      */
     if (!started && pg->have_unfound()) {
       pg->discover_all_missing(*rctx.query_map);
-      if (!rctx.query_map->size()) {
+      if (rctx.query_map->empty()) {
 	dout(10) << "do_recovery  no luck, giving up on this pg for now" << dendl;
 	recovery_wq.lock();
 	recovery_wq._dequeue(pg);
@@ -6374,7 +6403,7 @@ void OSD::process_peering_events(
     same_interval_since = MAX(pg->info.history.same_interval_since,
 			      same_interval_since);
     pg->write_if_dirty(*rctx.transaction);
-    if (split_pgs.size()) {
+    if (!split_pgs.empty()) {
       rctx.on_applied->add(new C_CompleteSplits(this, split_pgs));
       split_pgs.clear();
     }

@@ -45,6 +45,13 @@ check_host() {
 
     #echo host for $name is $host, i am $hostname
 
+    # sysvinit managed instance in standird location?
+    if [ -e "/var/lib/ceph/$type/ceph-$id/sysvinit" ]; then
+	host="$hostname"
+	echo "=== $type.$id === "
+	return 0
+    fi
+
     # ignore all sections without 'host' defined
     if [ -z "$host" ]; then
 	return 1
@@ -82,8 +89,8 @@ do_cmd() {
 	    sudo su $user -c "$1" || { [ -z "$3" ] && echo "failed: '$1'" && exit 1; }
 	fi
     else
-	[ $verbose -eq 1 ] && echo "--- $ssh $2 \"cd $sshdir ; ulimit -c unlimited ; $1\""
-	$ssh $2 "cd $sshdir ; ulimit -c unlimited ; $1" || { [ -z "$3" ] && echo "failed: '$ssh $1'" && exit 1; }
+	[ $verbose -eq 1 ] && echo "--- $ssh $2 \"if [ ! -d $sshdir ]; then mkdir -p $sshdir; fi; cd $sshdir ; ulimit -c unlimited ; $1\""
+	$ssh $2 "if [ ! -d $sshdir ]; then mkdir -p $sshdir; fi; cd $sshdir ; ulimit -c unlimited ; $1" || { [ -z "$3" ] && echo "failed: '$ssh $1'" && exit 1; }
     fi
 }
 
@@ -98,19 +105,54 @@ do_root_cmd() {
 	    sudo bash -c "$1" || { echo "failed: '$1'" ; exit 1; }
 	fi
     else
-	[ $verbose -eq 1 ] && echo "--- $rootssh $2 \"cd $sshdir ; ulimit -c unlimited ; $1\""
-	$rootssh $2 "cd $sshdir ; ulimit -c unlimited ; $1" || { echo "failed: '$rootssh $1'" ; exit 1; }
+	[ $verbose -eq 1 ] && echo "--- $rootssh $2 \"if [ ! -d $sshdir ]; then mkdir -p $sshdir; fi ; cd $sshdir ; ulimit -c unlimited ; $1\""
+	$rootssh $2 "if [ ! -d $sshdir ]; then mkdir -p $sshdir; fi ; cd $sshdir; ulimit -c unlimited ; $1" || { echo "failed: '$rootssh $1'" ; exit 1; }
     fi
+}
+
+get_local_daemon_list() {
+    type=$1
+    if [ -d "/var/lib/ceph/$type" ]; then
+	for i in `find /var/lib/ceph/$type -mindepth 1 -maxdepth 1 -type d -printf '%f\n'`; do
+	    if [ -e "/var/lib/ceph/$type/$i/sysvinit" ]; then
+		id=`echo $i | sed 's/.*-//'`
+		local="$local $type.$id"
+	    fi
+	done
+    fi
+}
+
+get_local_name_list() {
+    orig=$1
+    local=""
+
+    if [ -z "$orig" ]; then
+	# enumerate local directories
+	get_local_daemon_list "mon"
+	get_local_daemon_list "osd"
+	get_local_daemon_list "mds"
+	return
+    fi
+
+    for f in $orig; do
+	type=`echo $f | cut -c 1-3`   # e.g. 'mon', if $item is 'mon1'
+	id=`echo $f | cut -c 4- | sed 's/\\.//'`
+	get_local_daemon_list $type
+
+	# FIXME
+    done
 }
 
 get_name_list() {
     orig=$1
 
+    # extract list of monitors, mdss, osds defined in startup.conf
+    allconf=`$CCONF -c $conf -l mon | egrep -v '^mon$' ; \
+	$CCONF -c $conf -l mds | egrep -v '^mds$' ; \
+	$CCONF -c $conf -l osd | egrep -v '^osd$'`
+
     if [ -z "$orig" ]; then
-        # extract list of monitors, mdss, osds defined in startup.conf
-	what=`$CCONF -c $conf -l mon | egrep -v '^mon$' ; \
-	    $CCONF -c $conf -l mds | egrep -v '^mds$' ; \
-	    $CCONF -c $conf -l osd | egrep -v '^osd$'`
+	what="$allconf $local"
 	return
     fi
 
@@ -118,17 +160,16 @@ get_name_list() {
     for f in $orig; do
 	type=`echo $f | cut -c 1-3`   # e.g. 'mon', if $item is 'mon1'
 	id=`echo $f | cut -c 4- | sed 's/\\.//'`
-	all=`$CCONF -c $conf -l $type | egrep -v "^$type$" || true`
 	case $f in
 	    mon | osd | mds)
-		what="$what $all"
+		what=`echo $allconf $local | grep ^$type || true`
 		;;
 	    *)
-		if echo " " $all " " | egrep -v -q "( $type$id | $type.$id )"; then
-		    echo "$0: $type.$id not found ($conf defines \"$all\")"
+		if ! echo " " $allconf $local " " | egrep -q "( $type$id | $type.$id )"; then
+		    echo "$0: $type.$id not found ($conf defines" $allconf", /var/lib/ceph defines" $local")"
 		    exit 1
 		fi
-		what="$what $f"
+		what="$f"
 		;;
 	esac
     done

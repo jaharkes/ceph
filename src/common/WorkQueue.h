@@ -94,7 +94,7 @@ public:
     void *_void_dequeue() {
       list<T*> *out(new list<T*>);
       _dequeue(out);
-      if (out->size()) {
+      if (!out->empty()) {
 	return (void *)out;
       } else {
 	delete out;
@@ -251,10 +251,10 @@ public:
       return (void *)_dequeue();
     }
     void _void_process(void *p, TPHandle &handle) {
-      _process((T *)p, handle);
+      _process(static_cast<T *>(p), handle);
     }
     void _void_process_finish(void *p) {
-      _process_finish((T *)p);
+      _process_finish(static_cast<T *>(p));
     }
 
   public:

@@ -24,7 +24,6 @@ Source0:	http://ceph.com/download/%{name}-%{version}.tar.bz2
 Requires:	librbd1 = %{version}-%{release}
 Requires:	librados2 = %{version}-%{release}
 Requires:	libcephfs1 = %{version}-%{release}
-Requires:	perl
 Requires:	python
 Requires(post):	binutils
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
@@ -76,9 +75,6 @@ performance, reliability, and scalability.
 Summary:	Ceph fuse-based client
 Group:		System Environment/Base
 Requires:	%{name}
-Requires:	fuse-libs
-Requires:	libstdc++
-Requires:	libuuid
 BuildRequires:	fuse-devel
 %description fuse
 FUSE based client for Ceph distributed network file system
@@ -87,9 +83,6 @@ FUSE based client for Ceph distributed network file system
 Summary:	Ceph fuse-based client
 Group:		System Environment/Base
 Requires:	%{name}
-Requires:	fuse-libs
-Requires:	libstdc++
-Requires:	libuuid
 BuildRequires:	fuse-devel
 %description -n rbd-fuse
 FUSE based client to map Ceph rbd images to files
@@ -151,7 +144,6 @@ store using a simple file-like interface.
 Summary:	RADOS block device client library
 Group:		System Environment/Libraries
 License:	LGPL-2.0
-Requires:	librados2 = %{version}-%{release}
 %description -n librbd1
 RBD is a block device striped across multiple distributed objects in
 RADOS, a reliable, autonomic distributed object storage cluster
@@ -286,6 +278,7 @@ mkdir -p $RPM_BUILD_ROOT/usr/sbin
 ln -sf ../../etc/init.d/ceph %{buildroot}/usr/sbin/rcceph
 ln -sf ../../etc/init.d/ceph-radosgw %{buildroot}/usr/sbin/rcceph-radosgw
 install -m 0644 -D src/logrotate.conf $RPM_BUILD_ROOT%{_sysconfdir}/logrotate.d/ceph
+install -m 0644 -D src/rgw/logrotate.conf $RPM_BUILD_ROOT%{_sysconfdir}/logrotate.d/radosgw
 chmod 0644 $RPM_BUILD_ROOT%{_docdir}/ceph/sample.ceph.conf
 chmod 0644 $RPM_BUILD_ROOT%{_docdir}/ceph/sample.fetch_config
 mkdir -p $RPM_BUILD_ROOT%{_localstatedir}/lib/ceph/tmp/
@@ -295,6 +288,7 @@ mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/ceph/
 
 # udev rules
 install -D -m 644 udev/50-rbd.rules $RPM_BUILD_ROOT/lib/udev/rules.d/50-rbd.rules
+install -D -m 644 udev/95-ceph-osd.rules $RPM_BUILD_ROOT/lib/udev/rules.d/95-ceph-osd.rules
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -360,6 +354,7 @@ fi
 %config %{_sysconfdir}/bash_completion.d/radosgw-admin
 %config %{_sysconfdir}/bash_completion.d/rbd
 %config(noreplace) %{_sysconfdir}/logrotate.d/ceph
+%config(noreplace) %{_sysconfdir}/logrotate.d/radosgw
 %{_mandir}/man8/ceph-mon.8*
 %{_mandir}/man8/ceph-mds.8*
 %{_mandir}/man8/ceph-osd.8*
@@ -396,6 +391,7 @@ fi
 /sbin/ceph-disk-activate
 /sbin/ceph-disk-prepare
 /sbin/ceph-create-keys
+/lib/udev/rules.d/95-ceph-osd.rules
 
 #################################################################################
 %files fuse
@@ -516,68 +512,68 @@ fi
 #################################################################################
 %files -n ceph-test
 %defattr(-,root,root,-)
-%{_bindir}/bench_log
-%{_bindir}/dupstore
-%{_bindir}/kvstorebench
-%{_bindir}/multi_stress_watch
-%{_bindir}/omapbench
-%{_bindir}/psim
-%{_bindir}/radosacl
-%{_bindir}/rest-bench
-%{_bindir}/rgw_jsonparser
-%{_bindir}/rgw_multiparser
-%{_bindir}/scratchtool
-%{_bindir}/scratchtoolpp
-%{_bindir}/smalliobench
-%{_bindir}/smalliobenchdumb
-%{_bindir}/smalliobenchfs
-%{_bindir}/smalliobenchrbd
-%{_bindir}/ceph-filestore-dump
-%{_bindir}/streamtest
-%{_bindir}/test_cfuse_cache_invalidate
-%{_bindir}/test_cls_lock
-%{_bindir}/test_cls_rbd
-%{_bindir}/test_cls_refcount
-%{_bindir}/test_cls_rgw
-%{_bindir}/test_filejournal
-%{_bindir}/test_filestore
-%{_bindir}/test_filestore_idempotent
-%{_bindir}/test_filestore_idempotent_sequence
-%{_bindir}/test_filestore_workloadgen
-%{_bindir}/test_ioctls
-%{_bindir}/test_keyvaluedb_atomicity
-%{_bindir}/test_keyvaluedb_iterators
-%{_bindir}/test_libcephfs
-%{_bindir}/test_librbd
-%{_bindir}/test_librbd_fsx
-%{_bindir}/test_mon_workloadgen
-%{_bindir}/test_mutate
-%{_bindir}/test_object_map
-%{_bindir}/test_objectcacher_stress
-%{_bindir}/test_rados_api_aio
-%{_bindir}/test_rados_api_cls
-%{_bindir}/test_rados_api_io
-%{_bindir}/test_rados_api_list
-%{_bindir}/test_rados_api_misc
-%{_bindir}/test_rados_api_pool
-%{_bindir}/test_rados_api_snapshots
-%{_bindir}/test_rados_api_stat
-%{_bindir}/test_rados_api_watch_notify
-%{_bindir}/test_rewrite_latency
-%{_bindir}/test_stress_watch
-%{_bindir}/test_trans
-%{_bindir}/testcrypto
-%{_bindir}/testkeys
-%{_bindir}/testmsgr
-%{_bindir}/testrados
-%{_bindir}/testrados_delete_pools_parallel
-%{_bindir}/testrados_list_parallel
-%{_bindir}/testrados_open_pools_parallel
-%{_bindir}/testrados_watch_notify
-%{_bindir}/testsignal_handlers
-%{_bindir}/testtimers
-%{_bindir}/tpbench
-%{_bindir}/xattr_bench
+%{_bindir}/ceph_bench_log
+%{_bindir}/ceph_dupstore
+%{_bindir}/ceph_kvstorebench
+%{_bindir}/ceph_multi_stress_watch
+%{_bindir}/ceph_omapbench
+%{_bindir}/ceph_psim
+%{_bindir}/ceph_radosacl
+%{_bindir}/ceph_rgw_jsonparser
+%{_bindir}/ceph_rgw_multiparser
+%{_bindir}/ceph_scratchtool
+%{_bindir}/ceph_scratchtoolpp
+%{_bindir}/ceph_smalliobench
+%{_bindir}/ceph_smalliobenchdumb
+%{_bindir}/ceph_smalliobenchfs
+%{_bindir}/ceph_smalliobenchrbd
+%{_bindir}/ceph_filestore_dump
+%{_bindir}/ceph_streamtest
+%{_bindir}/ceph_test_cfuse_cache_invalidate
+%{_bindir}/ceph_test_cls_lock
+%{_bindir}/ceph_test_cls_rbd
+%{_bindir}/ceph_test_cls_refcount
+%{_bindir}/ceph_test_cls_rgw
+%{_bindir}/ceph_test_filejournal
+%{_bindir}/ceph_test_filestore
+%{_bindir}/ceph_test_filestore_idempotent
+%{_bindir}/ceph_test_filestore_idempotent_sequence
+%{_bindir}/ceph_test_filestore_workloadgen
+%{_bindir}/ceph_test_ioctls
+%{_bindir}/ceph_test_keyvaluedb_atomicity
+%{_bindir}/ceph_test_keyvaluedb_iterators
+%{_bindir}/ceph_test_libcephfs
+%{_bindir}/ceph_test_librbd
+%{_bindir}/ceph_test_librbd_fsx
+%{_bindir}/ceph_test_mon_workloadgen
+%{_bindir}/ceph_test_mutate
+%{_bindir}/ceph_test_object_map
+%{_bindir}/ceph_test_objectcacher_stress
+%{_bindir}/ceph_test_rados_api_aio
+%{_bindir}/ceph_test_rados_api_cls
+%{_bindir}/ceph_test_rados_api_io
+%{_bindir}/ceph_test_rados_api_list
+%{_bindir}/ceph_test_rados_api_misc
+%{_bindir}/ceph_test_rados_api_pool
+%{_bindir}/ceph_test_rados_api_snapshots
+%{_bindir}/ceph_test_rados_api_stat
+%{_bindir}/ceph_test_rados_api_watch_notify
+%{_bindir}/ceph_test_rewrite_latency
+%{_bindir}/ceph_test_stress_watch
+%{_bindir}/ceph_test_trans
+%{_bindir}/ceph_test_crypto
+%{_bindir}/ceph_test_keys
+%{_bindir}/ceph_test_msgr
+%{_bindir}/ceph_test_rados
+%{_bindir}/ceph_test_rados_delete_pools_parallel
+%{_bindir}/ceph_test_rados_list_parallel
+%{_bindir}/ceph_test_rados_open_pools_parallel
+%{_bindir}/ceph_test_rados_watch_notify
+%{_bindir}/ceph_test_signal_handlers
+%{_bindir}/ceph_test_timers
+%{_bindir}/ceph_tpbench
+%{_bindir}/ceph_xattr_bench
+%{_bindir}/ceph-coverage
 
 %files -n libcephfs_jni1
 %defattr(-,root,root,-)

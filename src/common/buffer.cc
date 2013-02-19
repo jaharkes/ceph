@@ -285,14 +285,14 @@ bool buffer_track_alloc = get_env_bool("CEPH_BUFFER_TRACK");
   }
   buffer::ptr& buffer::ptr::operator= (const ptr& p)
   {
-    // be careful -- we need to properly handle self-assignment.
     if (p._raw) {
-      p._raw->nref.inc();                      // inc new
+      p._raw->nref.inc();
       bdout << "ptr " << this << " get " << _raw << bendl;
     }
-    release();                                 // dec (+ dealloc) old (if any)
-    if (p._raw) {
-      _raw = p._raw;
+    buffer::raw *raw = p._raw; 
+    release();
+    if (raw) {
+      _raw = raw;
       _off = p._off;
       _len = p._len;
     } else {
@@ -371,7 +371,7 @@ bool buffer_track_alloc = get_env_bool("CEPH_BUFFER_TRACK");
     int l = _len < o._len ? _len : o._len;
     if (l) {
       int r = memcmp(c_str(), o.c_str(), l);
-      if (!r)
+      if (r)
 	return r;
     }
     if (_len < o._len)
@@ -736,7 +736,7 @@ bool buffer_track_alloc = get_env_bool("CEPH_BUFFER_TRACK");
 	 it != _buffers.end();
 	 it++) {
       if (p + it->length() > o) {
-	if (p >= o && p+it->length() >= o+l)
+	if (p >= o && p+it->length() <= o+l)
 	  it->zero();                         // all
 	else if (p >= o) 
 	  it->zero(0, o+l-p);                 // head
@@ -744,7 +744,7 @@ bool buffer_track_alloc = get_env_bool("CEPH_BUFFER_TRACK");
 	  it->zero(o-p, it->length()-(o-p));  // tail
       }
       p += it->length();
-      if (o+l >= p)
+      if (o+l <= p)
 	break;  // done
     }
   }

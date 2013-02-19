@@ -31,7 +31,6 @@
 #include "os/ObjectStore.h"
 #include "OSDCap.h"
 
-#include "common/DecayCounter.h"
 #include "osd/ClassHandler.h"
 
 #include "include/CompatSet.h"
@@ -170,6 +169,7 @@ public:
   ObjectStore *&store;
   LogClient &clog;
   PGRecoveryStats &pg_recovery_stats;
+  hobject_t infos_oid;
 private:
   Messenger *&cluster_messenger;
   Messenger *&client_messenger;
@@ -262,7 +262,7 @@ public:
   }
   bool first_scrub_stamp(pair<utime_t, pg_t> *out) {
     Mutex::Locker l(sched_scrub_lock);
-    if (last_scrub_pg.size() == 0)
+    if (last_scrub_pg.empty())
       return false;
     set< pair<utime_t, pg_t> >::iterator iter = last_scrub_pg.begin();
     *out = *iter;
@@ -271,7 +271,7 @@ public:
   bool next_scrub_stamp(pair<utime_t, pg_t> next,
 			pair<utime_t, pg_t> *out) {
     Mutex::Locker l(sched_scrub_lock);
-    if (last_scrub_pg.size() == 0)
+    if (last_scrub_pg.empty())
       return false;
     set< pair<utime_t, pg_t> >::iterator iter = last_scrub_pg.lower_bound(next);
     if (iter == last_scrub_pg.end())

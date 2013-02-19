@@ -12,8 +12,6 @@
  * 
  */
 
-using namespace std;
-
 #include "common/config.h"
 #include "common/strtol.h"
 
@@ -123,7 +121,7 @@ int main(int argc, const char **argv)
 	!add_key.empty() ||
 	list ||
 	!caps_fn.empty() ||
-	caps.size() ||
+	!caps.empty() ||
 	set_auid ||
 	print_key ||
 	create_keyring ||
@@ -236,7 +234,7 @@ int main(int argc, const char **argv)
     keyring.set_caps(ename, caps);
     modified = true;
   }
-  if (caps.size()) {
+  if (!caps.empty()) {
     keyring.set_caps(ename, caps);
     modified = true;
   }

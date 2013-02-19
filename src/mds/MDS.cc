@@ -408,7 +408,7 @@ void MDS::send_message_client_counted(Message *m, Connection *connection)
 void MDS::send_message_client_counted(Message *m, Session *session)
 {
   version_t seq = session->inc_push_seq();
-  dout(10) << "send_message_client_counted " << session->inst.name << " seq "
+  dout(10) << "send_message_client_counted " << session->info.inst.name << " seq "
 	   << seq << " " << *m << dendl;
   if (session->connection) {
     messenger->send_message(m, session->connection);
@@ -419,7 +419,7 @@ void MDS::send_message_client_counted(Message *m, Session *session)
 
 void MDS::send_message_client(Message *m, Session *session)
 {
-  dout(10) << "send_message_client " << session->inst << " " << *m << dendl;
+  dout(10) << "send_message_client " << session->info.inst << " " << *m << dendl;
  if (session->connection) {
     messenger->send_message(m, session->connection);
   } else {
@@ -690,6 +690,10 @@ void MDS::handle_mds_beacon(MMDSBeacon *m)
   m->put();
 }
 
+void MDS::request_osdmap(Context *c) {
+  objecter->wait_for_new_map(c, osdmap->get_epoch());
+}
+
 /* This function DOES put the passed message before returning*/
 void MDS::handle_command(MMonCommand *m)
 {
@@ -902,6 +906,20 @@ void MDS::handle_mds_map(MMDSMap *m)
       if (want_state == MDSMap::STATE_BOOT) {
         dout(10) << "not in map yet" << dendl;
       } else {
+	// did i get kicked by someone else?
+	if (g_conf->mds_enforce_unique_name) {
+	  if (uint64_t existing = mdsmap->find_mds_gid_by_name(name)) {
+	    MDSMap::mds_info_t& i = mdsmap->get_info_gid(existing);
+	    if (i.global_id > monc->get_global_id()) {
+	      dout(1) << "handle_mds_map i (" << addr
+		      << ") dne in the mdsmap, new instance has larger gid " << i.global_id
+		      << ", suicide" << dendl;
+	      suicide();
+	      goto out;
+	    }
+	  }
+	}
+
         dout(1) << "handle_mds_map i (" << addr
             << ") dne in the mdsmap, respawning myself" << dendl;
         respawn();
@@ -1830,7 +1848,7 @@ bool MDS::_dispatch(Message *m)
   }
 
   // finish any triggered contexts
-  while (finished_queue.size()) {
+  while (!finished_queue.empty()) {
     dout(7) << "mds has " << finished_queue.size() << " queued contexts" << dendl;
     dout(10) << finished_queue << dendl;
     list<Context*> ls;
@@ -2066,14 +2084,14 @@ bool MDS::ms_verify_authorizer(Connection *con, int peer_type,
     Session *s = sessionmap.get_session(n);
     if (!s) {
       s = new Session;
-      s->inst.addr = con->get_peer_addr();
-      s->inst.name = n;
-      dout(10) << " new session " << s << " for " << s->inst << " con " << con << dendl;
+      s->info.inst.addr = con->get_peer_addr();
+      s->info.inst.name = n;
+      dout(10) << " new session " << s << " for " << s->info.inst << " con " << con << dendl;
       con->set_priv(s);
       s->connection = con;
       sessionmap.add_session(s);
     } else {
-      dout(10) << " existing session " << s << " for " << s->inst << " existing con " << s->connection
+      dout(10) << " existing session " << s << " for " << s->info.inst << " existing con " << s->connection
 	       << ", new/authorizing con " << con << dendl;
       con->set_priv(s->get());
 

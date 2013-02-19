@@ -5,9 +5,42 @@ import logging
 import os
 import os.path
 import subprocess
+import stat
 import sys
 import tempfile
 import uuid
+
+CEPH_OSD_ONDISK_MAGIC = 'ceph osd volume v026'
+
+JOURNAL_UUID =         '45b0969e-9b03-4f30-b4c6-b4b80ceff106'
+DMCRYPT_JOURNAL_UUID = '45b0969e-9b03-4f30-b4c6-5ec00ceff106'
+OSD_UUID =             '4fbd7e29-9d25-41b8-afd0-062c0ceff05d'
+DMCRYPT_OSD_UUID =     '4fbd7e29-9d25-41b8-afd0-5ec00ceff05d'
+TOBE_UUID =            '89c57f98-2fe5-4dc0-89c1-f3ad0ceff2be'
+DMCRYPT_TOBE_UUID =    '89c57f98-2fe5-4dc0-89c1-5ec00ceff2be'
+
+DEFAULT_FS_TYPE = 'xfs'
+
+MOUNT_OPTIONS = dict(
+    btrfs='noatime,user_subvol_rm_allowed',
+    ext4='noatime,user_xattr',
+    xfs='noatime',
+    )
+
+MKFS_ARGS = dict(
+    btrfs=[
+        '-m', 'single',
+        '-l', '32768',
+        '-n', '32768',
+        ],
+    xfs=[
+        # xfs insists on not overwriting previous fs; even if we wipe
+        # partition table, we often recreate it exactly the same way,
+        # so we'll see ghosts of filesystems past
+        '-f',
+        '-i', 'size=2048',
+        ],
+    )
 
 
 log_name = __name__
@@ -38,6 +71,28 @@ class UnmountError(PrepareError):
     """
 
 
+def is_partition(dev):
+    """
+    Check whether a given device is a partition or a full disk.
+    """
+    # resolve symlink(s)
+    max = 10
+    while stat.S_ISLNK(os.lstat(dev).st_mode):
+        dev = os.readlink(dev)
+        max -= 1
+        if max == 0:
+            raise PrepareError('%s is a rats nest of symlinks' % dev)
+    if not stat.S_ISBLK(os.lstat(dev).st_mode):
+        raise PrepareError('not a block device', dev)
+
+    # if the device ends in a number, it is a partition (e.g., /dev/sda3)
+
+    # ugh i have no internet.. how do you do a python regex?
+    if dev.endswith('0') or dev.endswith('1') or dev.endswith('2') or dev.endswith('3') or dev.endswith('4') or dev.endswith('4') or dev.endswith('6') or dev.endswith('7') or dev.endswith('8') or dev.endswith('9'):
+        return True
+    return False
+
+
 def write_one_line(parent, name, text):
     """
     Write a file whose sole contents are a single line.
@@ -50,11 +105,6 @@ def write_one_line(parent, name, text):
         f.write(text + '\n')
         os.fsync(f.fileno())
     os.rename(tmp, path)
-
-
-CEPH_OSD_ONDISK_MAGIC = 'ceph osd volume v026'
-
-JOURNAL_UUID = '45b0969e-9b03-4f30-b4c6-b4b80ceff106'
 
 
 # TODO depend on python2.7
@@ -140,28 +190,66 @@ def get_fsid(cluster):
     return fsid
 
 
-DEFAULT_FS_TYPE = 'xfs'
+def get_or_create_dmcrypt_key(
+    uuid,
+    key_dir,
+    ):
+    path = os.path.join(key_dir, uuid)
 
-MOUNT_OPTIONS = dict(
-    btrfs='noatime,user_subvol_rm_allowed',
-    ext4='noatime,user_xattr',
-    xfs='noatime',
-    )
+    # already have it?
+    if os.path.exists(path):
+        return path
 
-MKFS_ARGS = dict(
-    btrfs=[
-        '-m', 'single',
-        '-l', '32768',
-        '-n', '32768',
-        ],
-    xfs=[
-        # xfs insists on not overwriting previous fs; even if we wipe
-        # partition table, we often recreate it exactly the same way,
-        # so we'll see ghosts of filesystems past
-        '-f',
-        '-i', 'size=2048',
-        ],
-    )
+    # make a new key
+    try:
+        if not os.path.exists(key_dir):
+            os.makedirs(key_dir)
+        with file('/dev/urandom', 'rb') as i:
+            key = i.read(256)
+            with file(path, 'wb') as f:
+                f.write(key)
+        return path
+    except:
+        raise PrepareError('unable to read or create dm-crypt key', path)
+
+
+def dmcrypt_map(
+    rawdev,
+    keypath,
+    uuid,
+    ):
+    dev = '/dev/mapper/'+ uuid
+    args = [
+        'cryptsetup',
+        '--key-file',
+        keypath,
+        '--key-size', '256',
+        'create',
+        uuid,
+        rawdev,
+        ]
+    try:
+        subprocess.check_call(args)
+        return dev
+
+    except subprocess.CalledProcessError as e:
+        raise PrepareError('unable to map device', rawdev)
+
+
+def dmcrypt_unmap(
+    uuid
+    ):
+    args = [
+        'cryptsetup',
+        'remove',
+        uuid
+    ]
+
+    try:
+        subprocess.check_call(args)
+
+    except subprocess.CalledProcessError as e:
+        raise PrepareError('unable to unmap device', uuid)
 
 
 def mount(
@@ -179,6 +267,7 @@ def mount(
         dir='/var/lib/ceph/tmp',
         )
     try:
+        log.debug('Mounting %s on %s with options %s', dev, path, options)
         subprocess.check_call(
             args=[
                 'mount',
@@ -202,6 +291,7 @@ def unmount(
     path,
     ):
     try:
+        log.debug('Unmounting %s', path)
         subprocess.check_call(
             args=[
                 'umount',
@@ -254,17 +344,243 @@ def get_free_partition_index(dev):
     return num
 
 
-def prepare(
-    disk,
+def zap(dev):
+    """
+    Destroy the partition table and content of a given disk.
+    """
+    try:
+        log.debug('Zapping partition table on %s', dev)
+
+        # try to wipe out any GPT partition table backups.  sgdisk
+        # isn't too thorough.
+        lba_size = 4096
+        size = 33 * lba_size
+        with file(dev, 'wb') as f:
+            f.seek(-size, os.SEEK_END)
+            f.write(size*'\0')
+
+        subprocess.check_call(
+            args=[
+                'sgdisk',
+                '--zap-all',
+                '--clear',
+                '--mbrtogpt',
+                '--',
+                dev,
+                ],
+            )
+    except subprocess.CalledProcessError as e:
+        raise PrepareError(e)
+
+
+def prepare_journal_dev(
+    data,
     journal,
     journal_size,
+    journal_uuid,
+    journal_dm_keypath,
+    ):
+
+    if is_partition(journal):
+        log.debug('Journal %s is a partition', journal)
+        log.warning('OSD will not be hot-swappable if journal is not the same device as the osd data')
+        return (journal, None, None)
+
+    key = None
+    ptype = JOURNAL_UUID
+    if journal_dm_keypath:
+        ptype = DMCRYPT_JOURNAL_UUID
+
+    # it is a whole disk.  create a partition!
+    num = None
+    if journal == data:
+        # we're sharing the disk between osd data and journal;
+        # make journal be partition number 2, so it's pretty; put
+        # journal at end of free space so partitioning tools don't
+        # reorder them suddenly
+        num = 2
+        journal_part = '{num}:-{size}M:0'.format(
+            num=num,
+            size=journal_size,
+            )
+    else:
+        # sgdisk has no way for me to say "whatever is the next
+        # free index number" when setting type guids etc, so we
+        # need to awkwardly look up the next free number, and then
+        # fix that in the call -- and hope nobody races with us;
+        # then again nothing guards the partition table from races
+        # anyway
+        num = get_free_partition_index(dev=journal)
+        journal_part = '{num}:0:+{size}M'.format(
+            num=num,
+            size=journal_size,
+            )
+        log.warning('OSD will not be hot-swappable if journal is not the same device as the osd data')
+
+    try:
+        log.debug('Creating journal partition num %d size %d on %s', num, journal_size, journal)
+        subprocess.check_call(
+            args=[
+                'sgdisk',
+                '--new={part}'.format(part=journal_part),
+                '--change-name={num}:ceph journal'.format(num=num),
+                '--partition-guid={num}:{journal_uuid}'.format(
+                    num=num,
+                    journal_uuid=journal_uuid,
+                    ),
+                '--typecode={num}:{uuid}'.format(
+                    num=num,
+                    uuid=ptype,
+                    ),
+                '--',
+                journal,
+                ],
+            )
+        subprocess.check_call(
+            args=[
+                # also make sure the kernel refreshes the new table
+                'partprobe',
+                journal,
+                ],
+            )
+
+        journal_symlink = '/dev/disk/by-partuuid/{journal_uuid}'.format(
+            journal_uuid=journal_uuid,
+            )
+
+        journal_dmcrypt = None
+        if journal_dm_keypath:
+            journal_dmcrypt = journal_symlink
+            journal_symlink = '/dev/mapper/{uuid}'.format(uuid=journal_uuid)
+
+        log.debug('Journal is GPT partition %s', journal_symlink)
+        return (journal_symlink, journal_dmcrypt, journal_uuid)
+
+    except subprocess.CalledProcessError as e:
+        raise PrepareError(e)
+
+
+def prepare_journal_file(
+    journal,
+    journal_size):
+
+    if not os.path.exists(journal):
+        log.debug('Creating journal file %s with size %dM', journal, journal_size)
+        with file(journal, 'wb') as f:
+            f.truncate(journal_size * 1048576)
+
+    # FIXME: should we resize an existing journal file?
+
+    log.debug('Journal is file %s', journal)
+    log.warning('OSD will not be hot-swappable if journal is not the same device as the osd data')
+    return (journal, None, None)
+
+
+def prepare_journal(
+    data,
+    journal,
+    journal_size,
+    journal_uuid,
+    force_file,
+    force_dev,
+    journal_dm_keypath,
+    ):
+
+    if journal is None:
+        if force_dev:
+            raise PrepareError('Journal is unspecified; not a block device')
+        return (None, None, None)
+
+    if not os.path.exists(journal):
+        if force_dev:
+            raise PrepareError('Journal does not exist; not a block device', journal)
+        return prepare_journal_file(journal, journal_size)
+
+    jmode = os.stat(journal).st_mode
+    if stat.S_ISREG(jmode):
+        if force_dev:
+            raise PrepareError('Journal is not a block device', journal)
+        return prepare_journal_file(journal, journal_size)
+
+    if stat.S_ISBLK(jmode):
+        if force_file:
+            raise PrepareError('Journal is not a regular file', journal)
+        return prepare_journal_dev(data, journal, journal_size, journal_uuid, journal_dm_keypath)
+
+    raise PrepareError('Journal %s is neither a block device nor regular file', journal)
+
+
+def adjust_symlink(target, path):
+    create = True
+    if os.path.lexists(path):
+        try:
+            mode = os.path.lstat(canonical).st_mode
+            if stat.S_ISREG(mode):
+                log.debug('Removing old file %s', canonical)
+                os.unlink(canonical)
+            elif stat.S_ISLNK(mode):
+                old = os.readlink(canonical)
+                if old != journal:
+                    log.debug('Removing old symlink %s -> %s', canonical, old)
+                    os.unlink(canonical)
+                else:
+                    create = False
+        except:
+            raise PrepareError('unable to remove (or adjust) old file (symlink)', canonical)
+    if create:
+        log.debug('Creating symlink %s -> %s', path, target)
+        try:
+            os.symlink(target, path)
+        except:
+            raise PrepareError('unable to create symlink %s -> %s' % (path, target))
+
+def prepare_dir(
+    path,
+    journal,
+    cluster_uuid,
+    osd_uuid,
+    journal_uuid,
+    journal_dmcrypt = None,
+    ):
+    log.debug('Preparing osd data dir %s', path)
+
+    if osd_uuid is None:
+        osd_uuid = str(uuid.uuid4())
+
+    if journal is not None:
+        # we're using an external journal; point to it here
+        adjust_symlink(journal, os.path.join(path, 'journal'))
+
+    if journal_dmcrypt is not None:
+        adjust_symlink(journal_dmcrypt, os.path.join(path, 'journal_dmcrypt'))
+    else:
+        try:
+            os.unlink(os.path.join(path, 'journal_dmcrypt'))
+        except:
+            pass
+
+    write_one_line(path, 'ceph_fsid', cluster_uuid)
+    write_one_line(path, 'fsid', osd_uuid)
+    write_one_line(path, 'magic', CEPH_OSD_ONDISK_MAGIC)
+
+    if journal_uuid is not None:
+        # i.e., journal is a tagged partition
+        write_one_line(path, 'journal_uuid', journal_uuid)
+
+def prepare_dev(
+    data,
+    journal,
     fstype,
     mkfs_args,
     mount_options,
     cluster_uuid,
+    osd_uuid,
+    journal_uuid,
+    journal_dmcrypt,
+    osd_dm_keypath,
     ):
     """
-    Prepare a disk to be used as an OSD data disk.
+    Prepare a data/journal combination to be used for an OSD.
 
     The ``magic`` file is written last, so it's presence is a reliable
     indicator of the whole sequence having completed.
@@ -273,154 +589,116 @@ def prepare(
     it.
     """
 
-    try:
-        # this kills the crab
-        subprocess.check_call(
-            args=[
-                'sgdisk',
-                '--zap-all',
-                '--clear',
-                '--mbrtogpt',
-                '--',
-                disk,
-                ],
-            )
-    except subprocess.CalledProcessError as e:
-        raise PrepareError(e)
+    ptype_tobe = TOBE_UUID
+    ptype_osd = OSD_UUID
+    if osd_dm_keypath:
+        ptype_tobe = DMCRYPT_TOBE_UUID
+        ptype_osd = DMCRYPT_OSD_UUID
 
-    osd_uuid = str(uuid.uuid4())
-
-    # store the partition uuid iff using external journal
-    journal_uuid = None
-
-    if journal is not None:
-        journal_uuid = str(uuid.uuid4())
-
-        if journal == disk:
-            # we're sharing the disk between osd data and journal;
-            # make journal be partition number 2, so it's pretty; put
-            # journal at end of free space so partitioning tools don't
-            # reorder them suddenly
-            num = 2
-            journal_part = '{num}:-{size}M:0'.format(
-                num=num,
-                size=journal_size,
-                )
-        else:
-            # sgdisk has no way for me to say "whatever is the next
-            # free index number" when setting type guids etc, so we
-            # need to awkwardly look up the next free number, and then
-            # fix that in the call -- and hope nobody races with us;
-            # then again nothing guards the partition table from races
-            # anyway
-            num = get_free_partition_index(dev=journal)
-            journal_part = '{num}:0:+{size}M'.format(
-                num=num,
-                size=journal_size,
-                )
-
+    rawdev = None
+    if is_partition(data):
+        log.debug('OSD data device %s is a partition', data)
+        rawdev = data
+    else:
+        log.debug('Creating osd partition on %s', data)
         try:
             subprocess.check_call(
                 args=[
                     'sgdisk',
-                    '--new={part}'.format(part=journal_part),
-                    '--change-name={num}:ceph journal'.format(num=num),
-                    '--partition-guid={num}:{journal_uuid}'.format(
-                        num=num,
-                        journal_uuid=journal_uuid,
+                    '--largest-new=1',
+                    '--change-name=1:ceph data',
+                    '--partition-guid=1:{osd_uuid}'.format(
+                        osd_uuid=osd_uuid,
                         ),
-                    '--typecode={num}:{uuid}'.format(
-                        num=num,
-                        uuid=JOURNAL_UUID,
-                        ),
+                    '--typecode=1:%s' % ptype_tobe,
                     '--',
-                    journal,
+                    data,
                     ],
                 )
             subprocess.check_call(
                 args=[
                     # also make sure the kernel refreshes the new table
                     'partprobe',
-                    journal,
+                    data,
                     ],
                 )
         except subprocess.CalledProcessError as e:
             raise PrepareError(e)
 
+        rawdev = '{data}1'.format(data=data)
+
+    dev = None
+    if osd_dm_keypath:
+        dev = dmcrypt_map(rawdev, osd_dm_keypath, osd_uuid)
+    else:
+        dev = rawdev
+
     try:
-        subprocess.check_call(
-            args=[
-                'sgdisk',
-                '--largest-new=1',
-                '--change-name=1:ceph data',
-                '--partition-guid=1:{osd_uuid}'.format(
-                    osd_uuid=osd_uuid,
-                    ),
-                '--typecode=1:89c57f98-2fe5-4dc0-89c1-f3ad0ceff2be',
+        args = [
+            'mkfs',
+            '--type={fstype}'.format(fstype=fstype),
+            ]
+        if mkfs_args is not None:
+            args.extend(mkfs_args.split())
+            if fstype == 'xfs':
+                args.extend(['-f'])  # always force
+        else:
+            args.extend(MKFS_ARGS.get(fstype, []))
+        args.extend([
                 '--',
-                disk,
-                ],
-            )
-        subprocess.check_call(
-            args=[
-                # also make sure the kernel refreshes the new table
-                'partprobe',
-                disk,
-                ],
-            )
-    except subprocess.CalledProcessError as e:
-        raise PrepareError(e)
+                dev,
+                ])
+        try:
+            log.debug('Creating %s fs on %s', fstype, dev)
+            subprocess.check_call(args=args)
+        except subprocess.CalledProcessError as e:
+            raise PrepareError(e)
 
-    dev = '{disk}1'.format(disk=disk)
-    args = [
-        'mkfs',
-        '--type={fstype}'.format(fstype=fstype),
-        ]
-    args.extend(MKFS_ARGS.get(fstype, []))
-    if mkfs_args is not None:
-        args.extend(mkfs_args.split())
-    args.extend
-    args.extend([
-            '--',
-            dev,
-            ])
-    try:
-        subprocess.check_call(args=args)
-    except subprocess.CalledProcessError as e:
-        raise PrepareError(e)
+        #remove whitespaces from mount_options
+        if mount_options is not None:
+            mount_options = "".join(mount_options.split())
 
-    path = mount(dev=dev, fstype=fstype, options=mount_options)
-    try:
-        if journal_uuid is not None:
-            # we're using an external journal; point to it here
-            os.symlink(
-                '/dev/disk/by-partuuid/{journal_uuid}'.format(
-                    journal_uuid=journal_uuid,
-                    ),
-                os.path.join(path, 'journal'),
+        path = mount(dev=dev, fstype=fstype, options=mount_options)
+
+        try:
+            prepare_dir(
+                path=path,
+                journal=journal,
+                cluster_uuid=cluster_uuid,
+                osd_uuid=osd_uuid,
+                journal_uuid=journal_uuid,
+                journal_dmcrypt=journal_dmcrypt,
                 )
-        write_one_line(path, 'ceph_fsid', cluster_uuid)
-        write_one_line(path, 'fsid', osd_uuid)
-        write_one_line(path, 'magic', CEPH_OSD_ONDISK_MAGIC)
+        finally:
+            unmount(path)
     finally:
-        unmount(path)
+        if rawdev != dev:
+            dmcrypt_unmap(osd_uuid)
 
-    try:
-        subprocess.check_call(
-            args=[
-                'sgdisk',
-               '--typecode=1:4fbd7e29-9d25-41b8-afd0-062c0ceff05d',
-                '--',
-                disk,
-                ],
-            )
-    except subprocess.CalledProcessError as e:
-        raise PrepareError(e)
+    if not is_partition(data):
+        try:
+            subprocess.check_call(
+                args=[
+                    'sgdisk',
+                    '--typecode=1:%s' % ptype_osd,
+                    '--',
+                    data,
+                    ],
+                )
+            subprocess.check_call(
+                args=[
+                    # also make sure the kernel refreshes the new table
+                    'partprobe',
+                    data,
+                    ],
+                )
+        except subprocess.CalledProcessError as e:
+            raise PrepareError(e)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Prepare a disk for a Ceph OSD',
+        description='Prepare a directory for a Ceph OSD',
         )
     parser.add_argument(
         '-v', '--verbose',
@@ -438,13 +716,59 @@ def parse_args():
         help='cluster uuid to assign this disk to',
         )
     parser.add_argument(
+        '--osd-uuid',
+        metavar='UUID',
+        help='unique OSD uuid to assign this disk to',
+        )
+    parser.add_argument(
+        '--journal-uuid',
+        metavar='UUID',
+        help='unique uuid to assign to the journal',
+        )
+    parser.add_argument(
         '--fs-type',
         help='file system type to use (e.g. "ext4")',
         )
     parser.add_argument(
-        'disk',
-        metavar='DISK',
-        help='path to OSD data disk block device',
+        '--zap-disk',
+        action='store_true', default=None,
+        help='destroy the partition table (and content) of a disk',
+        )
+    parser.add_argument(
+        '--data-dir',
+        action='store_true', default=None,
+        help='verify that DATA is a dir',
+        )
+    parser.add_argument(
+        '--data-dev',
+        action='store_true', default=None,
+        help='verify that DATA is a block device',
+        )
+    parser.add_argument(
+        '--journal-file',
+        action='store_true', default=None,
+        help='verify that JOURNAL is a file',
+        )
+    parser.add_argument(
+        '--journal-dev',
+        action='store_true', default=None,
+        help='verify that JOURNAL is a block device',
+        )
+    parser.add_argument(
+        '--dmcrypt',
+        action='store_true', default=None,
+        help='encrypt DATA and/or JOURNAL devices with dm-crypt',
+        )
+    parser.add_argument(
+        '--dmcrypt-key-dir',
+        metavar='KEYDIR',
+        default='/etc/ceph/dmcrypt-keys',
+        help='directory where dm-crypt keys are stored',
+        )
+    parser.add_argument(
+        'data',
+        metavar='DATA',
+        help='path to OSD data (a disk block device or directory)',
         )
     parser.add_argument(
         'journal',
@@ -473,7 +797,23 @@ def main():
         level=loglevel,
         )
 
+    journal_dm_keypath = None
+    osd_dm_keypath = None
+
     try:
+        if not os.path.exists(args.data):
+            raise PrepareError('data path does not exist', args.data)
+
+        # FIXME: verify disk/partitions is not in use
+        if args.zap_disk is not None:
+            if not os.path.exists(args.data):
+                raise PrepareError('does not exist', args.data)
+            mode = os.stat(args.data).st_mode
+            if stat.S_ISBLK(mode) and not is_partition(args.data):
+                zap(args.data)
+            else:
+                raise PrepareError('not full block device; cannot zap', args.data)
+
         if args.cluster_uuid is None:
             args.cluster_uuid = get_fsid(cluster=args.cluster)
             if args.cluster_uuid is None:
@@ -484,24 +824,43 @@ def main():
         if args.fs_type is None:
             args.fs_type = get_conf(
                 cluster=args.cluster,
-                variable='osd_fs_type',
+                variable='osd_mkfs_type',
                 )
+            if args.fs_type is None:
+                args.fs_type = get_conf(
+                    cluster=args.cluster,
+                    variable='osd_fs_type',
+                    )
             if args.fs_type is None:
                 args.fs_type = DEFAULT_FS_TYPE
 
         mkfs_args = get_conf(
             cluster=args.cluster,
-            variable='osd_fs_mkfs_arguments_{fstype}'.format(
+            variable='osd_mkfs_options_{fstype}'.format(
                 fstype=args.fs_type,
                 ),
             )
+        if mkfs_args is None:
+            mkfs_args = get_conf(
+                cluster=args.cluster,
+                variable='osd_fs_mkfs_options_{fstype}'.format(
+                    fstype=args.fs_type,
+                    ),
+                )
 
         mount_options = get_conf(
             cluster=args.cluster,
-            variable='osd_fs_mount_options_{fstype}'.format(
+            variable='osd_mount_options_{fstype}'.format(
                 fstype=args.fs_type,
                 ),
             )
+        if mount_options is None:
+            mount_options = get_conf(
+                cluster=args.cluster,
+                variable='osd_fs_mount_options_{fstype}'.format(
+                    fstype=args.fs_type,
+                    ),
+                )
 
         journal_size = get_conf_with_default(
             cluster=args.cluster,
@@ -509,16 +868,68 @@ def main():
             )
         journal_size = int(journal_size)
 
-        prepare(
-            disk=args.disk,
+        # colocate journal with data?
+        dmode = os.stat(args.data).st_mode
+        if stat.S_ISBLK(dmode) and not is_partition(args.data) and args.journal is None and args.journal_file is None:
+            log.info('Will colocate journal with data on %s', args.data)
+            args.journal = args.data
+
+        if args.journal_uuid is None:
+            args.journal_uuid = str(uuid.uuid4())
+        if args.osd_uuid is None:
+            args.osd_uuid = str(uuid.uuid4())
+
+        # dm-crypt keys?
+        if args.dmcrypt:
+            journal_dm_keypath = get_or_create_dmcrypt_key(args.journal_uuid, args.dmcrypt_key_dir)
+            osd_dm_keypath = get_or_create_dmcrypt_key(args.osd_uuid, args.dmcrypt_key_dir)
+
+        # prepare journal
+        (journal_symlink, journal_dmcrypt, journal_uuid) = prepare_journal(
+            data=args.data,
             journal=args.journal,
             journal_size=journal_size,
-            fstype=args.fs_type,
-            mkfs_args=mkfs_args,
-            mount_options=mount_options,
-            cluster_uuid=args.cluster_uuid,
+            journal_uuid=args.journal_uuid,
+            force_file=args.journal_file,
+            force_dev=args.journal_dev,
+            journal_dm_keypath=journal_dm_keypath,
             )
+
+        # prepare data
+        if stat.S_ISDIR(dmode):
+            if args.data_dev:
+                raise PrepareError('data path is not a block device', args.data)
+            prepare_dir(
+                path=args.data,
+                journal=journal_symlink,
+                cluster_uuid=args.cluster_uuid,
+                osd_uuid=args.osd_uuid,
+                journal_uuid=journal_uuid,
+                journal_dmcrypt=journal_dmcrypt,
+                )
+        elif stat.S_ISBLK(dmode):
+            if args.data_dir:
+                raise PrepareError('data path is not a directory', args.data)
+            prepare_dev(
+                data=args.data,
+                journal=journal_symlink,
+                fstype=args.fs_type,
+                mkfs_args=mkfs_args,
+                mount_options=mount_options,
+                cluster_uuid=args.cluster_uuid,
+                osd_uuid=args.osd_uuid,
+                journal_uuid=journal_uuid,
+                journal_dmcrypt=journal_dmcrypt,
+                osd_dm_keypath=osd_dm_keypath,
+                )
+        else:
+            raise PrepareError('not a dir or block device', args.data)
+
     except PrepareError as e:
+        if journal_dm_keypath:
+            os.unlink(journal_dm_keypath)
+        if osd_dm_keypath:
+            os.unlink(osd_dm_keypath)
         print >>sys.stderr, '{prog}: {msg}'.format(
             prog=args.prog,
             msg=e,

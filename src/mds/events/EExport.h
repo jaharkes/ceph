@@ -21,6 +21,7 @@
 #include "../MDS.h"
 
 #include "EMetaBlob.h"
+#include "../LogEvent.h"
 
 class EExport : public LogEvent {
 public:
@@ -37,28 +38,14 @@ public:
   
   set<dirfrag_t> &get_bounds() { return bounds; }
   
-  void print(ostream& out) {
+  void print(ostream& out) const {
     out << "EExport " << base << " " << metablob;
   }
 
-  void encode(bufferlist& bl) const {
-    __u8 struct_v = 2;
-    ::encode(struct_v, bl);
-    ::encode(stamp, bl);
-    ::encode(metablob, bl);
-    ::encode(base, bl);
-    ::encode(bounds, bl);
-  }
-  void decode(bufferlist::iterator &bl) {
-    __u8 struct_v;
-    ::decode(struct_v, bl);
-    if (struct_v >= 2)
-      ::decode(stamp, bl);
-    ::decode(metablob, bl);
-    ::decode(base, bl);
-    ::decode(bounds, bl);
-  }
-  
+  void encode(bufferlist& bl) const;
+  void decode(bufferlist::iterator &bl);
+  void dump(Formatter *f) const;
+  static void generate_test_instances(list<EExport*>& ls);
   void replay(MDS *mds);
 
 };

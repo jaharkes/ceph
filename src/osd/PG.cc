@@ -63,8 +63,10 @@ PG::PG(OSDService *o, OSDMapRef curmap,
        const hobject_t& ioid) :
   osd(o), osdmap_ref(curmap), pool(_pool),
   _lock("PG::_lock"),
-  ref(0), deleting(false), dirty_info(false), dirty_log(false),
-  info(p), coll(p), log_oid(loid), biginfo_oid(ioid),
+  ref(0), deleting(false), dirty_info(false), dirty_big_info(false), dirty_log(false),
+  info(p),
+  info_struct_v(0),
+  coll(p), log_oid(loid), biginfo_oid(ioid),
   recovery_item(this), scrub_item(this), scrub_finalize_item(this), snap_trim_item(this), stat_queue_item(this),
   recovery_ops_active(0),
   waiting_on_backfill(0),
@@ -97,6 +99,7 @@ void PG::lock(bool no_lockdep)
   _lock.Lock(no_lockdep);
   // if we have unrecorded dirty state with the lock dropped, there is a bug
   assert(!dirty_info);
+  assert(!dirty_big_info);
   assert(!dirty_log);
 
   dout(30) << "lock" << dendl;
@@ -107,6 +110,7 @@ void PG::lock_with_map_lock_held(bool no_lockdep)
   _lock.Lock(no_lockdep);
   // if we have unrecorded dirty state with the lock dropped, there is a bug
   assert(!dirty_info);
+  assert(!dirty_big_info);
   assert(!dirty_log);
 
   dout(30) << "lock_with_map_lock_held" << dendl;
@@ -138,7 +142,7 @@ std::string PG::gen_prefix() const
   
 
 
-void PG::IndexedLog::trim(ObjectStore::Transaction& t, eversion_t s) 
+void PG::IndexedLog::trim(ObjectStore::Transaction& t, hobject_t& log_oid, eversion_t s)
 {
   if (complete_to != log.end() &&
       complete_to->version <= s) {
@@ -146,14 +150,17 @@ void PG::IndexedLog::trim(ObjectStore::Transaction& t, eversion_t s)
 		    << " on " << *this << dendl;
   }
 
+  set<string> keys_to_rm;
   while (!log.empty()) {
     pg_log_entry_t &e = *log.begin();
     if (e.version > s)
       break;
     generic_dout(20) << "trim " << e << dendl;
     unindex(e);         // remove from index,
+    keys_to_rm.insert(e.get_key_name());
     log.pop_front();    // from log
   }
+  t.omap_rmkeys(coll_t::META_COLL, log_oid, keys_to_rm);
 
   // raise tail?
   if (tail < s)
@@ -462,6 +469,7 @@ void PG::rewind_divergent_log(ObjectStore::Transaction& t, eversion_t newhead)
     merge_old_entry(t, *d);
 
   dirty_info = true;
+  dirty_big_info = true;
   dirty_log = true;
 }
 
@@ -597,6 +605,7 @@ void PG::merge_log(ObjectStore::Transaction& t,
 
   if (changed) {
     dirty_info = true;
+    dirty_big_info = true;
     dirty_log = true;
   }
 }
@@ -881,6 +890,7 @@ void PG::generate_past_intervals()
 
   // record our work.
   dirty_info = true;
+  dirty_big_info = true;
 }
 
 /*
@@ -897,6 +907,7 @@ void PG::trim_past_intervals()
       return;
     dout(10) << __func__ << ": trimming " << pif->second << dendl;
     past_intervals.erase(pif++);
+    dirty_big_info = true;
   }
 }
 
@@ -1409,6 +1420,7 @@ void PG::activate(ObjectStore::Transaction& t,
 
   // write pg info, log
   dirty_info = true;
+  dirty_big_info = true; // maybe
   dirty_log = true;
 
   // clean up stray objects
@@ -1760,7 +1772,8 @@ void PG::_activate_committed(epoch_t e)
 
   if (dirty_info) {
     ObjectStore::Transaction *t = new ObjectStore::Transaction;
-    write_info(*t);
+    dirty_info = true;
+    write_if_dirty(*t);
     int tr = osd->store->queue_transaction(osr.get(), t);
     assert(tr == 0);
   }
@@ -2061,8 +2074,10 @@ void PG::split_into(pg_t child_pgid, PG *child, unsigned split_bits)
   _split_into(child_pgid, child, split_bits);
 
   child->dirty_info = true;
+  child->dirty_big_info = true;
   child->dirty_log = true;
   dirty_info = true;
+  dirty_big_info = true;
   dirty_log = true;
 }
 
@@ -2307,34 +2322,57 @@ void PG::init(int role, vector<int>& newup, vector<int>& newacting, pg_history_t
 
   reg_next_scrub();
 
-  write_info(*t);
-  write_log(*t);
+  dirty_info = true;
+  dirty_big_info = true;
+  dirty_log = true;
+  write_if_dirty(*t);
 }
 
 void PG::write_info(ObjectStore::Transaction& t)
 {
   // pg state
-  bufferlist infobl;
-  __u8 struct_v = 5;
-  ::encode(struct_v, infobl);
-  ::encode(get_osdmap()->get_epoch(), infobl);
-  t.collection_setattr(coll, "info", infobl);
- 
-  // potentially big stuff
-  bufferlist bigbl;
-  ::encode(past_intervals, bigbl);
-  ::encode(snap_collections, bigbl);
-  ::encode(info, bigbl);
-  dout(20) << "write_info bigbl " << bigbl.length() << dendl;
-  t.truncate(coll_t::META_COLL, biginfo_oid, 0);
-  t.write(coll_t::META_COLL, biginfo_oid, 0, bigbl.length(), bigbl);
+  __u8 cur_struct_v = 6;
+
+  assert(info_struct_v <= cur_struct_v);
+
+  // Only need to write struct_v to attr when upgrading
+  if (info_struct_v < cur_struct_v) {
+    bufferlist attrbl;
+    info_struct_v = cur_struct_v;
+    ::encode(info_struct_v, attrbl);
+    t.collection_setattr(coll, "info", attrbl);
+  }
+
+  // info.  store purged_snaps separately.
+  interval_set<snapid_t> purged_snaps;
+  map<string,bufferlist> v;
+  ::encode(get_osdmap()->get_epoch(), v[get_epoch_key(info.pgid)]);
+  purged_snaps.swap(info.purged_snaps);
+  ::encode(info, v[get_info_key(info.pgid)]);
+  purged_snaps.swap(info.purged_snaps);
+
+  if (dirty_big_info) {
+    // potentially big stuff
+    bufferlist& bigbl = v[get_biginfo_key(info.pgid)];
+    ::encode(past_intervals, bigbl);
+    ::encode(snap_collections, bigbl);
+    ::encode(info.purged_snaps, bigbl);
+    dout(20) << "write_info bigbl " << bigbl.length() << dendl;
+  }
+
+  t.omap_setkeys(coll_t::META_COLL, osd->infos_oid, v);
 
   dirty_info = false;
+  dirty_big_info = false;
 }
 
-epoch_t PG::peek_map_epoch(ObjectStore *store, coll_t coll, bufferlist *bl)
+epoch_t PG::peek_map_epoch(ObjectStore *store, coll_t coll, hobject_t &infos_oid, bufferlist *bl)
 {
   assert(bl);
+  pg_t pgid;
+  snapid_t snap;
+  bool ok = coll.is_pg(pgid, snap);
+  assert(ok);
   store->collection_getattr(coll, "info", *bl);
   bufferlist::iterator bp = bl->begin();
   __u8 struct_v = 0;
@@ -2342,50 +2380,49 @@ epoch_t PG::peek_map_epoch(ObjectStore *store, coll_t coll, bufferlist *bl)
   if (struct_v < 5)
     return 0;
   epoch_t cur_epoch = 0;
-  ::decode(cur_epoch, bp);
+  if (struct_v < 6) {
+    ::decode(cur_epoch, bp);
+  } else {
+    // get epoch out of leveldb
+    bufferlist tmpbl;
+    string ek = get_epoch_key(pgid);
+    set<string> keys;
+    keys.insert(get_epoch_key(pgid));
+    map<string,bufferlist> values;
+    store->omap_get_values(coll_t::META_COLL, infos_oid, keys, &values);
+    assert(values.size() == 1);
+    tmpbl = values[ek];
+    bufferlist::iterator p = tmpbl.begin();
+    ::decode(cur_epoch, p);
+  }
   return cur_epoch;
 }
 
 void PG::write_log(ObjectStore::Transaction& t)
 {
   dout(10) << "write_log" << dendl;
-
-  // assemble buffer
-  bufferlist bl;
-
-  // build buffer
-  ondisklog.tail = 0;
+  t.remove(coll_t::META_COLL, log_oid);
+  t.touch(coll_t::META_COLL, log_oid);
+  map<string,bufferlist> keys;
   for (list<pg_log_entry_t>::iterator p = log.log.begin();
        p != log.log.end();
        p++) {
-    uint64_t startoff = bl.length();
-
-    bufferlist ebl(sizeof(*p)*2);
-    ::encode(*p, ebl);
-    __u32 crc = ebl.crc32c(0);
-    ::encode(ebl, bl);
-    ::encode(crc, bl);
-
-    p->offset = startoff;
+    bufferlist bl(sizeof(*p) * 2);
+    p->encode_with_checksum(bl);
+    keys[p->get_key_name()].claim(bl);
   }
-  ondisklog.head = bl.length();
-  ondisklog.has_checksums = true;
+  dout(10) << "write_log " << keys.size() << " keys" << dendl;
 
-  // write it
-  t.remove(coll_t::META_COLL, log_oid );
-  t.write(coll_t::META_COLL, log_oid , 0, bl.length(), bl);
+  ::encode(ondisklog.divergent_priors, keys["divergent_priors"]);
 
-  bufferlist blb(sizeof(ondisklog));
-  ::encode(ondisklog, blb);
-  t.collection_setattr(coll, "ondisklog", blb);
-  
-  dout(10) << "write_log to " << ondisklog.tail << "~" << ondisklog.length() << dendl;
+  t.omap_setkeys(coll_t::META_COLL, log_oid, keys);
+
   dirty_log = false;
 }
 
 void PG::write_if_dirty(ObjectStore::Transaction& t)
 {
-  if (dirty_info)
+  if (dirty_big_info || dirty_info)
     write_info(t);
   if (dirty_log)
     write_log(t);
@@ -2403,45 +2440,9 @@ void PG::trim(ObjectStore::Transaction& t, eversion_t trim_to)
     assert(trim_to <= info.last_complete);
 
     dout(10) << "trim " << log << " to " << trim_to << dendl;
-    log.trim(t, trim_to);
+    log.trim(t, log_oid, trim_to);
     info.log_tail = log.tail;
-    trim_ondisklog(t);
   }
-}
-
-void PG::trim_ondisklog(ObjectStore::Transaction& t) 
-{
-  uint64_t new_tail;
-  if (log.empty()) {
-    new_tail = ondisklog.head;
-  } else {
-    new_tail = log.log.front().offset;
-  }
-  bool same_block = (new_tail & ~4095) == (ondisklog.tail & ~4095);
-  dout(15) << "trim_ondisklog tail " << ondisklog.tail << " -> " << new_tail
-	   << ", now " << new_tail << "~" << (ondisklog.head - new_tail)
-	   << " " << (same_block ? "(same block)" : "(different block)")
-	   << dendl;
-  assert(new_tail >= ondisklog.tail);
-  
-  if (same_block)
-    return;
-
-  ondisklog.tail = new_tail;
-
-  if (!g_conf->osd_preserve_trimmed_log) {
-    uint64_t zt = new_tail & ~4095;
-    if (zt > ondisklog.zero_to) {
-      t.zero(coll_t::META_COLL, log_oid, ondisklog.zero_to, zt - ondisklog.zero_to);
-      dout(15) << "trim_ondisklog zeroing from " << ondisklog.zero_to
-	       << " to " << zt << dendl;
-      ondisklog.zero_to = zt;
-    }
-  }
-
-  bufferlist blb(sizeof(ondisklog));
-  ::encode(ondisklog, blb);
-  t.collection_setattr(coll, "ondisklog", blb);
 }
 
 void PG::trim_peers()
@@ -2469,46 +2470,33 @@ void PG::add_log_entry(pg_log_entry_t& e, bufferlist& log_bl)
 
   // log mutation
   log.add(e);
-  if (ondisklog.has_checksums) {
-    bufferlist ebl(sizeof(e)*2);
-    ::encode(e, ebl);
-    __u32 crc = ebl.crc32c(0);
-    ::encode(ebl, log_bl);
-    ::encode(crc, log_bl);
-  } else {
-    ::encode(e, log_bl);
-  }
   dout(10) << "add_log_entry " << e << dendl;
+
+  e.encode_with_checksum(log_bl);
 }
 
 
-void PG::append_log(vector<pg_log_entry_t>& logv, eversion_t trim_to, ObjectStore::Transaction &t)
+void PG::append_log(
+  vector<pg_log_entry_t>& logv, eversion_t trim_to, ObjectStore::Transaction &t)
 {
   dout(10) << "append_log " << log << " " << logv << dendl;
 
-  bufferlist bl;
+  map<string,bufferlist> keys;
   for (vector<pg_log_entry_t>::iterator p = logv.begin();
        p != logv.end();
        p++) {
-    p->offset = ondisklog.head + bl.length();
-    add_log_entry(*p, bl);
+    p->offset = 0;
+    add_log_entry(*p, keys[p->get_key_name()]);
   }
 
-  dout(10) << "append_log  " << ondisklog.tail << "~" << ondisklog.length()
-	   << " adding " << bl.length() << dendl;
-
-  t.write(coll_t::META_COLL, log_oid, ondisklog.head, bl.length(), bl );
-  ondisklog.head += bl.length();
-
-  bufferlist blb(sizeof(ondisklog));
-  ::encode(ondisklog, blb);
-  t.collection_setattr(coll, "ondisklog", blb);
-  dout(10) << "append_log  now " << ondisklog.tail << "~" << ondisklog.length() << dendl;
+  dout(10) << "append_log  adding " << keys.size() << " keys" << dendl;
+  t.omap_setkeys(coll_t::META_COLL, log_oid, keys);
 
   trim(t, trim_to);
 
   // update the local pg, pg log
-  write_info(t);
+  dirty_info = true;
+  write_if_dirty(t);
 }
 
 bool PG::check_log_for_corruption(ObjectStore *store)
@@ -2595,12 +2583,14 @@ std::string PG::get_corrupt_pg_log_name() const
   return buf;
 }
 
-int PG::read_info(ObjectStore *store, const coll_t coll, bufferlist &bl,
+int PG::read_info(
+  ObjectStore *store, const coll_t coll, bufferlist &bl,
   pg_info_t &info, map<epoch_t,pg_interval_t> &past_intervals,
-  hobject_t &biginfo_oid, interval_set<snapid_t>  &snap_collections)
+  hobject_t &biginfo_oid, hobject_t &infos_oid,
+  interval_set<snapid_t>  &snap_collections, __u8 &struct_v)
 {
   bufferlist::iterator p = bl.begin();
-  __u8 struct_v;
+  bufferlist lbl;
 
   // info
   ::decode(struct_v, p);
@@ -2610,17 +2600,34 @@ int PG::read_info(ObjectStore *store, const coll_t coll, bufferlist &bl,
     ::decode(past_intervals, p);
   
     // snap_collections
-    bl.clear();
-    store->collection_getattr(coll, "snap_collections", bl);
-    p = bl.begin();
+    store->collection_getattr(coll, "snap_collections", lbl);
+    p = lbl.begin();
     ::decode(struct_v, p);
   } else {
-    bl.clear();
-    int r = store->read(coll_t::META_COLL, biginfo_oid, 0, 0, bl);
-    if (r < 0)
-       return r;
-    p = bl.begin();
-    ::decode(past_intervals, p);
+    if (struct_v < 6) {
+      int r = store->read(coll_t::META_COLL, biginfo_oid, 0, 0, lbl);
+      if (r < 0)
+        return r;
+      p = lbl.begin();
+      ::decode(past_intervals, p);
+    } else {
+      // get info out of leveldb
+      string k = get_info_key(info.pgid);
+      string bk = get_biginfo_key(info.pgid);
+      set<string> keys;
+      keys.insert(k);
+      keys.insert(bk);
+      map<string,bufferlist> values;
+      store->omap_get_values(coll_t::META_COLL, infos_oid, keys, &values);
+      assert(values.size() == 2);
+      lbl = values[k];
+      p = lbl.begin();
+      ::decode(info, p);
+
+      lbl = values[bk];
+      p = lbl.begin();
+      ::decode(past_intervals, p);
+    }
   }
 
   if (struct_v < 3) {
@@ -2634,8 +2641,10 @@ int PG::read_info(ObjectStore *store, const coll_t coll, bufferlist &bl,
     }
   } else {
     ::decode(snap_collections, p);
-    if (struct_v >= 4)
+    if (struct_v >= 4 && struct_v < 6)
       ::decode(info, p);
+    else if (struct_v >= 6)
+      ::decode(info.purged_snaps, p);
   }
   return 0;
 }
@@ -2643,41 +2652,23 @@ int PG::read_info(ObjectStore *store, const coll_t coll, bufferlist &bl,
 void PG::read_state(ObjectStore *store, bufferlist &bl)
 {
   int r = read_info(store, coll, bl, info, past_intervals, biginfo_oid,
-    snap_collections);
+    osd->infos_oid, snap_collections, info_struct_v);
   assert(r >= 0);
 
-  try {
-    ostringstream oss;
-    read_log(store, coll, log_oid, info, ondisklog, log, missing, oss, this);
-    if (oss.str().length())
-      osd->clog.error() << oss;
-  }
-  catch (const buffer::error &e) {
-    string cr_log_coll_name(get_corrupt_pg_log_name());
-    dout(0) << "Got exception '" << e.what() << "' while reading log. "
-            << "Moving corrupted log file to '" << cr_log_coll_name
-	    << "' for later " << "analysis." << dendl;
-
-    ondisklog.zero();
-
-    // clear log index
-    log.head = log.tail = info.last_update;
-
-    // reset info
-    info.log_tail = info.last_update;
-
-    // Move the corrupt log to a new place and create a new zero-length log entry.
+  ostringstream oss;
+  if (read_log(
+      store, coll, log_oid, info,
+      ondisklog, log, missing, oss, this)) {
+    /* We don't want to leave the old format around in case the next log
+     * write happens to be an append_log()
+     */
     ObjectStore::Transaction t;
-    coll_t cr_log_coll(cr_log_coll_name);
-    t.create_collection(cr_log_coll);
-    t.collection_move(cr_log_coll, coll_t::META_COLL, log_oid);
-    t.touch(coll_t::META_COLL, log_oid);
-    write_info(t);
-    store->apply_transaction(t);
-
-    info.last_backfill = hobject_t();
-    info.stats.stats.clear();
+    write_log(t);
+    int r = osd->store->apply_transaction(t);
+    assert(!r);
   }
+  if (oss.str().length())
+    osd->clog.error() << oss;
 
   // log any weirdness
   log_weirdness();
@@ -2716,6 +2707,13 @@ void PG::log_weirdness()
 		      << " last_complete " << info.last_complete
 		      << " < log.tail " << log.tail
 		      << "\n";
+
+  if (log.caller_ops.size() > log.log.size()) {
+    osd->clog.error() << info.pgid
+		      << " caller_ops.size " << log.caller_ops.size()
+		      << " > log size " << log.log.size()
+		      << "\n";
+  }
 }
 
 coll_t PG::make_snap_collection(ObjectStore::Transaction& t, snapid_t s)
@@ -2723,8 +2721,10 @@ coll_t PG::make_snap_collection(ObjectStore::Transaction& t, snapid_t s)
   coll_t c(info.pgid, s);
   if (!snap_collections.contains(s)) {
     snap_collections.insert(s);
-    write_info(t);
-    dout(10) << "create_snap_collection " << c << ", set now " << snap_collections << dendl;
+    dirty_big_info = true;
+    write_if_dirty(t);
+    dout(10) << "create_snap_collection " << c << ", set now "
+	     << snap_collections << dendl;
     t.create_collection(c);
   }
   return c;
@@ -2744,7 +2744,7 @@ void PG::update_snap_collections(vector<pg_log_entry_t> &log_entries,
       } catch (...) {
 	snaps.clear();
       }
-      if (snaps.size()) {
+      if (!snaps.empty()) {
 	make_snap_collection(t, snaps[0]);
 	if (snaps.size() > 1)
 	  make_snap_collection(t, *(snaps.rbegin()));
@@ -3129,6 +3129,20 @@ void PG::sub_op_scrub_stop(OpRequestRef op)
 
   MOSDSubOpReply *reply = new MOSDSubOpReply(m, 0, get_osdmap()->get_epoch(), CEPH_OSD_FLAG_ACK);
   osd->send_message_osd_cluster(reply, m->get_connection());
+}
+
+
+void PG::check_ondisk_snap_colls(
+  const interval_set<snapid_t> &ondisk_snapcolls)
+{
+  if (!(ondisk_snapcolls == snap_collections)) {
+    derr << "ondisk_snapcolls: " << ondisk_snapcolls
+	 << " does not match snap_collections " << snap_collections
+	 << " repairing." << dendl;
+    osd->clog.error() << info.pgid << " ondisk snapcolls " << ondisk_snapcolls << " != snap_collections "
+		      << snap_collections << ", repairing.";
+    snap_collections = ondisk_snapcolls;
+  }
 }
 
 void PG::clear_scrub_reserved()
@@ -3719,7 +3733,7 @@ void PG::chunky_scrub() {
             start = scrubber.end;
 
             // special case: reached end of file store, implicitly a boundary
-            if (objects.size() == 0) {
+            if (objects.empty()) {
               break;
             }
 
@@ -4037,13 +4051,13 @@ void PG::_compare_scrubmaps(const map<int,ScrubMap*> &maps,
       }
     }
     assert(auth != maps.end());
-    if (cur_missing.size()) {
+    if (!cur_missing.empty()) {
       missing[*k] = cur_missing;
     }
-    if (cur_inconsistent.size()) {
+    if (!cur_inconsistent.empty()) {
       inconsistent[*k] = cur_inconsistent;
     }
-    if (cur_inconsistent.size() || cur_missing.size()) {
+    if (!cur_inconsistent.empty() || !cur_missing.empty()) {
       authoritative[*k] = auth->first;
     }
   }
@@ -4078,7 +4092,7 @@ void PG::scrub_compare_maps() {
       ss);
     dout(2) << ss.str() << dendl;
 
-    if (authoritative.size() || scrubber.inconsistent_snapcolls.size()) {
+    if (!authoritative.empty() || !scrubber.inconsistent_snapcolls.empty()) {
       osd->clog.error(ss);
     }
 
@@ -4102,7 +4116,7 @@ void PG::scrub_process_inconsistent() {
   bool deep_scrub = state_test(PG_STATE_DEEP_SCRUB);
   const char *mode = (repair ? "repair": (deep_scrub ? "deep-scrub" : "scrub"));
 
-  if (scrubber.authoritative.size() || scrubber.inconsistent.size()) {
+  if (!scrubber.authoritative.empty() || !scrubber.inconsistent.empty()) {
     stringstream ss;
     for (map<hobject_t, set<int> >::iterator obj =
 	   scrubber.inconsistent_snapcolls.begin();
@@ -4231,7 +4245,8 @@ void PG::scrub_finish() {
 
   {
     ObjectStore::Transaction *t = new ObjectStore::Transaction;
-    write_info(*t);
+    dirty_info = true;
+    write_if_dirty(*t);
     int tr = osd->store->queue_transaction(osr.get(), t);
     assert(tr == 0);
   }
@@ -4552,6 +4567,7 @@ void PG::start_peering_interval(const OSDMapRef lastmap,
   if (!lastmap) {
     dout(10) << " no lastmap" << dendl;
     dirty_info = true;
+    dirty_big_info = true;
   } else {
     bool new_interval = pg_interval_t::check_new_interval(
       oldacting, newacting,
@@ -4563,6 +4579,7 @@ void PG::start_peering_interval(const OSDMapRef lastmap,
     if (new_interval) {
       dout(10) << " noting past " << past_intervals.rbegin()->second << dendl;
       dirty_info = true;
+      dirty_big_info = true;
     }
   }
 
@@ -4649,7 +4666,7 @@ void PG::start_peering_interval(const OSDMapRef lastmap,
   osd->remove_want_pg_temp(info.pgid);
   cancel_recovery();
 
-  if (acting.empty() && up.size() && up[0] == osd->whoami) {
+  if (acting.empty() && !up.empty() && up[0] == osd->whoami) {
     dout(10) << " acting empty, but i am up[0], clearing pg_temp" << dendl;
     osd->queue_want_pg_temp(info.pgid, acting);
   }
@@ -4677,6 +4694,7 @@ void PG::proc_primary_info(ObjectStore::Transaction &t, const pg_info_t &oinfo)
       adjust_local_snaps();
     }
     dirty_info = true;
+    dirty_big_info = true;
   }
 }
 
@@ -4689,7 +4707,7 @@ ostream& operator<<(ostream& out, const PG& pg)
   out << " r=" << pg.get_role();
   out << " lpr=" << pg.get_last_peering_reset();
 
-  if (pg.past_intervals.size()) {
+  if (!pg.past_intervals.empty()) {
     out << " pi=" << pg.past_intervals.begin()->first << "-" << pg.past_intervals.rbegin()->second.last
 	<< "/" << pg.past_intervals.size();
   }
@@ -5042,20 +5060,136 @@ std::ostream& operator<<(std::ostream& oss,
 #undef dout_prefix
 #define dout_prefix if (passedpg) _prefix(_dout, passedpg)
 
-void PG::read_log(ObjectStore *store, coll_t coll, hobject_t log_oid,
+bool PG::read_log(ObjectStore *store, coll_t coll, hobject_t log_oid,
   const pg_info_t &info, OndiskLog &ondisklog, IndexedLog &log,
   pg_missing_t &missing, ostringstream &oss, const PG *passedpg)
 {
-  // load bounds
-  ondisklog.tail = ondisklog.head = 0;
+  dout(10) << "read_log" << dendl;
+  bool rewrite_log = false;
+
+  // legacy?
+  struct stat st;
+  int r = store->stat(coll_t::META_COLL, log_oid, &st);
+  assert(r == 0);
+  if (st.st_size > 0) {
+    read_log_old(store, coll, log_oid, info, ondisklog, log, missing, oss, passedpg);
+    rewrite_log = true;
+  } else {
+    log.tail = info.log_tail;
+    ObjectMap::ObjectMapIterator p = store->get_omap_iterator(coll_t::META_COLL, log_oid);
+    if (p) for (p->seek_to_first(); p->valid() ; p->next()) {
+      bufferlist bl = p->value();//Copy bufferlist before creating iterator
+      bufferlist::iterator bp = bl.begin();
+      if (p->key() == "divergent_priors") {
+	::decode(ondisklog.divergent_priors, bp);
+	dout(20) << "read_log " << ondisklog.divergent_priors.size() << " divergent_priors" << dendl;
+      } else {
+	pg_log_entry_t e;
+	e.decode_with_checksum(bp);
+	dout(20) << "read_log " << e << dendl;
+	if (!log.log.empty()) {
+	  pg_log_entry_t last_e(log.log.back());
+	  assert(last_e.version.version == e.version.version - 1);
+	  assert(last_e.version.epoch <= e.version.epoch);
+	}
+	log.log.push_back(e);
+	log.head = e.version;
+      }
+    }
+  }
+  log.head = info.last_update;
+  log.index();
+
+  // build missing
+  if (info.last_complete < info.last_update) {
+    dout(10) << "read_log checking for missing items over interval (" << info.last_complete
+	     << "," << info.last_update << "]" << dendl;
+
+    set<hobject_t> did;
+    for (list<pg_log_entry_t>::reverse_iterator i = log.log.rbegin();
+	 i != log.log.rend();
+	 i++) {
+      if (i->version <= info.last_complete) break;
+      if (did.count(i->soid)) continue;
+      did.insert(i->soid);
+      
+      if (i->is_delete()) continue;
+      
+      bufferlist bv;
+      int r = store->getattr(coll, i->soid, OI_ATTR, bv);
+      if (r >= 0) {
+	object_info_t oi(bv);
+	if (oi.version < i->version) {
+	  dout(15) << "read_log  missing " << *i << " (have " << oi.version << ")" << dendl;
+	  missing.add(i->soid, i->version, oi.version);
+	}
+      } else {
+	dout(15) << "read_log  missing " << *i << dendl;
+	missing.add(i->soid, i->version, eversion_t());
+      }
+    }
+    for (map<eversion_t, hobject_t>::reverse_iterator i =
+	   ondisklog.divergent_priors.rbegin();
+	 i != ondisklog.divergent_priors.rend();
+	 ++i) {
+      if (i->first <= info.last_complete) break;
+      if (did.count(i->second)) continue;
+      did.insert(i->second);
+      bufferlist bv;
+      int r = store->getattr(coll, i->second, OI_ATTR, bv);
+      if (r >= 0) {
+	object_info_t oi(bv);
+	/**
+	 * 1) we see this entry in the divergent priors mapping
+	 * 2) we didn't see an entry for this object in the log
+	 *
+	 * From 1 & 2 we know that either the object does not exist
+	 * or it is at the version specified in the divergent_priors
+	 * map since the object would have been deleted atomically
+	 * with the addition of the divergent_priors entry, an older
+	 * version would not have been recovered, and a newer version
+	 * would show up in the log above.
+	 */
+	assert(oi.version == i->first);
+      } else {
+	dout(15) << "read_log  missing " << *i << dendl;
+	missing.add(i->second, i->first, eversion_t());
+      }
+    }
+  }
+  dout(10) << "read_log done" << dendl;
+  return rewrite_log;
+}
+
+void PG::read_log_old(ObjectStore *store, coll_t coll, hobject_t log_oid,
+  const pg_info_t &info, OndiskLog &ondisklog, IndexedLog &log,
+  pg_missing_t &missing, ostringstream &oss, const PG *passedpg)
+{
+  // load bounds, based on old OndiskLog encoding.
+  uint64_t ondisklog_tail = 0;
+  uint64_t ondisklog_head = 0;
+  uint64_t ondisklog_zero_to;
+  bool ondisklog_has_checksums;
 
   bufferlist blb;
   store->collection_getattr(coll, "ondisklog", blb);
-  bufferlist::iterator p = blb.begin();
-  ::decode(ondisklog, p);
-
-  dout(10) << "read_log " << ondisklog.tail << "~" << ondisklog.length() << dendl;
-
+  {
+    bufferlist::iterator bl = blb.begin();
+    DECODE_START_LEGACY_COMPAT_LEN(3, 3, 3, bl);
+    ondisklog_has_checksums = (struct_v >= 2);
+    ::decode(ondisklog_tail, bl);
+    ::decode(ondisklog_head, bl);
+    if (struct_v >= 4)
+      ::decode(ondisklog_zero_to, bl);
+    else
+      ondisklog_zero_to = 0;
+    if (struct_v >= 5)
+      ::decode(ondisklog.divergent_priors, bl);
+    DECODE_FINISH(bl);
+  }
+  uint64_t ondisklog_length = ondisklog_head - ondisklog_tail;
+  dout(10) << "read_log " << ondisklog_tail << "~" << ondisklog_length << dendl;
+ 
   log.tail = info.log_tail;
 
   // In case of sobject_t based encoding, may need to list objects in the store
@@ -5063,15 +5197,15 @@ void PG::read_log(ObjectStore *store, coll_t coll, hobject_t log_oid,
   bool listed_collection = false;
   vector<hobject_t> ls;
   
-  if (ondisklog.head > 0) {
+  if (ondisklog_head > 0) {
     // read
     bufferlist bl;
-    store->read(coll_t::META_COLL, log_oid, ondisklog.tail, ondisklog.length(), bl);
-    if (bl.length() < ondisklog.length()) {
+    store->read(coll_t::META_COLL, log_oid, ondisklog_tail, ondisklog_length, bl);
+    if (bl.length() < ondisklog_length) {
       std::ostringstream oss;
       oss << "read_log got " << bl.length() << " bytes, expected "
-	  << ondisklog.head << "-" << ondisklog.tail << "="
-	  << ondisklog.length();
+	  << ondisklog_head << "-" << ondisklog_tail << "="
+	  << ondisklog_length;
       throw read_log_error(oss.str().c_str());
     }
     
@@ -5081,8 +5215,8 @@ void PG::read_log(ObjectStore *store, coll_t coll, hobject_t log_oid,
     eversion_t last;
     bool reorder = false;
     while (!p.end()) {
-      uint64_t pos = ondisklog.tail + p.get_off();
-      if (ondisklog.has_checksums) {
+      uint64_t pos = ondisklog_tail + p.get_off();
+      if (ondisklog_has_checksums) {
 	bufferlist ebl;
 	::decode(ebl, p);
 	__u32 crc;
@@ -5150,19 +5284,19 @@ void PG::read_log(ObjectStore *store, coll_t coll, hobject_t log_oid,
       }
 
       e.offset = pos;
-      uint64_t endpos = ondisklog.tail + p.get_off();
+      uint64_t endpos = ondisklog_tail + p.get_off();
       log.log.push_back(e);
       last = e.version;
 
       // [repair] at end of log?
       if (!p.end() && e.version == info.last_update) {
 	oss << info.pgid << " log has extra data at "
-	   << endpos << "~" << (ondisklog.head-endpos) << " after "
+	   << endpos << "~" << (ondisklog_head-endpos) << " after "
 	   << info.last_update << "\n";
 
 	dout(0) << "read_log " << endpos << " *** extra gunk at end of log, "
-	        << "adjusting ondisklog.head" << dendl;
-	ondisklog.head = endpos;
+	        << "adjusting ondisklog_head" << dendl;
+	ondisklog_head = endpos;
 	break;
       }
     }
@@ -5177,68 +5311,6 @@ void PG::read_log(ObjectStore *store, coll_t coll, hobject_t log_oid,
 	log.log.push_back(p->second);
     }
   }
-
-  log.head = info.last_update;
-  log.index();
-
-  // build missing
-  if (info.last_complete < info.last_update) {
-    dout(10) << "read_log checking for missing items over interval (" << info.last_complete
-	     << "," << info.last_update << "]" << dendl;
-
-    set<hobject_t> did;
-    for (list<pg_log_entry_t>::reverse_iterator i = log.log.rbegin();
-	 i != log.log.rend();
-	 i++) {
-      if (i->version <= info.last_complete) break;
-      if (did.count(i->soid)) continue;
-      did.insert(i->soid);
-      
-      if (i->is_delete()) continue;
-      
-      bufferlist bv;
-      int r = store->getattr(coll, i->soid, OI_ATTR, bv);
-      if (r >= 0) {
-	object_info_t oi(bv);
-	if (oi.version < i->version) {
-	  dout(15) << "read_log  missing " << *i << " (have " << oi.version << ")" << dendl;
-	  missing.add(i->soid, i->version, oi.version);
-	}
-      } else {
-	dout(15) << "read_log  missing " << *i << dendl;
-	missing.add(i->soid, i->version, eversion_t());
-      }
-    }
-    for (map<eversion_t, hobject_t>::reverse_iterator i =
-	   ondisklog.divergent_priors.rbegin();
-	 i != ondisklog.divergent_priors.rend();
-	 ++i) {
-      if (i->first <= info.last_complete) break;
-      if (did.count(i->second)) continue;
-      did.insert(i->second);
-      bufferlist bv;
-      int r = store->getattr(coll, i->second, OI_ATTR, bv);
-      if (r >= 0) {
-	object_info_t oi(bv);
-	/**
-	 * 1) we see this entry in the divergent priors mapping
-	 * 2) we didn't see an entry for this object in the log
-	 *
-	 * From 1 & 2 we know that either the object does not exist
-	 * or it is at the version specified in the divergent_priors
-	 * map since the object would have been deleted atomically
-	 * with the addition of the divergent_priors entry, an older
-	 * version would not have been recovered, and a newer version
-	 * would show up in the log above.
-	 */
-	assert(oi.version == i->first);
-      } else {
-	dout(15) << "read_log  missing " << *i << dendl;
-	missing.add(i->second, i->first, eversion_t());
-      }
-    }
-  }
-  dout(10) << "read_log done" << dendl;
 }
 
 /*------------ Recovery State Machine----------------*/
@@ -6042,6 +6114,7 @@ boost::statechart::result PG::RecoveryState::Active::react(const AdvMap& advmap)
     pg->snap_trimq.union_of(pg->pool.newly_removed_snaps);
     dout(10) << *pg << " snap_trimq now " << pg->snap_trimq << dendl;
     pg->dirty_info = true;
+    pg->dirty_big_info = true;
   }
   pg->check_recovery_sources(pg->get_osdmap());
 
@@ -6359,6 +6432,7 @@ boost::statechart::result PG::RecoveryState::Stray::react(const MLogRec& logevt)
     pg->info = msg->info;
     pg->reg_next_scrub();
     pg->dirty_info = true;
+    pg->dirty_big_info = true;  // maybe.
     pg->dirty_log = true;
     pg->log.claim_log(msg->log);
     pg->missing.clear();
@@ -6612,7 +6686,7 @@ PG::RecoveryState::GetLog::GetLog(my_context ctx) :
 
   // adjust acting?
   if (!pg->choose_acting(newest_update_osd)) {
-    if (pg->want_acting.size()) {
+    if (!pg->want_acting.empty()) {
       post_event(NeedActingChange());
     } else {
       post_event(IsIncomplete());

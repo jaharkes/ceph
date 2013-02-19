@@ -2,6 +2,50 @@
  Release Notes
 ===============
 
+v0.56.3 "bobtail"
+-----------------
+
+This release has several bug fixes surrounding OSD stability.  Most
+significantly, an issue with OSDs being unresponsive shortly after
+startup (and occasionally crashing due to an internal heartbeat check)
+is resolved.  Please upgrade.
+
+Upgrading
+~~~~~~~~~
+
+* A bug was fixed in which the OSDMap epoch for PGs without any IO
+  requests was not recorded.  If there are pools in the cluster that
+  are completely idle (for example, the ``data`` and ``metadata``
+  pools normally used by CephFS), and a large number of OSDMap epochs
+  have elapsed since the ``ceph-osd`` daemon was last restarted, those
+  maps will get reprocessed when the daemon restarts.  This process
+  can take a while if there are a lot of maps.  A workaround is to
+  'touch' any idle pools with IO prior to restarting the daemons after
+  packages are upgraded::
+
+   rados bench 10 write -t 1 -b 4096 -p {POOLNAME}
+
+  This will typically generate enough IO to touch every PG in the pool
+  without generating significant cluster load, and also cleans up any
+  temporary objects it creates.
+
+Notable changes
+~~~~~~~~~~~~~~~
+
+* osd: flush peering work queue prior to start
+* osd: persist osdmap epoch for idle PGs
+* osd: fix and simplify connection handling for heartbeats
+* osd: avoid crash on invalid admin command
+* mon: fix rare races with monitor elections and commands
+* mon: enforce that OSD reweights be between 0 and 1 (NOTE: not CRUSH weights)
+* mon: approximate client, recovery bandwidth logging
+* radosgw: fixed some XML formatting to conform to Swift API inconsistency
+* radosgw: fix usage accounting bug; add repair tool
+* radosgw: make fallback URI configurable (necessary on some web servers)
+* librbd: fix handling for interrupted 'unprotect' operations
+* mds, ceph-fuse: allow file and directory layouts to be modified via virtual xattrs
+
+
 v0.56.2 "bobtail"
 -----------------
 

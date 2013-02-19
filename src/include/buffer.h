@@ -248,7 +248,7 @@ public:
 					p(other.p),
 					p_off(other.p_off) {}
 
-      iterator operator=(const iterator& other) {
+      iterator& operator=(const iterator& other) {
 	if (this != &other) {
 	  bl = other.bl;
 	  ls = other.ls;
@@ -305,8 +305,10 @@ public:
     
     list(const list& other) : _buffers(other._buffers), _len(other._len), last_p(this) { }
     list& operator= (const list& other) {
-      _buffers = other._buffers;
-      _len = other._len;
+      if (this != &other) {
+        _buffers = other._buffers;
+        _len = other._len;
+      }
       return *this;
     }
 
@@ -465,6 +467,7 @@ inline bool operator>=(bufferlist& l, bufferlist& r) {
   for (unsigned p = 0; ; p++) {
     if (l.length() > p && r.length() == p) return true;
     if (r.length() == p && l.length() == p) return true;
+    if (l.length() == p && r.length() > p) return false;
     if (l[p] > r[p]) return true;
     if (l[p] < r[p]) return false;
   }

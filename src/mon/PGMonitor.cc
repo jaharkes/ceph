@@ -164,7 +164,6 @@ void PGMonitor::update_from_paxos()
   }
 
   // walk through incrementals
-  utime_t now(ceph_clock_now(g_ceph_context));
   while (version > pg_map.version) {
     bufferlist bl;
     int err = get_version(pg_map.version+1, bl);
@@ -1369,7 +1368,7 @@ void PGMonitor::check_full_osd_health(list<pair<health_status_t,string> >& summa
 				      const set<int>& s, const char *desc,
 				      health_status_t sev) const
 {
-  if (s.size() > 0) {
+  if (!s.empty()) {
     ostringstream ss;
     ss << s.size() << " " << desc << " osd(s)";
     summary.push_back(make_pair(sev, ss.str()));

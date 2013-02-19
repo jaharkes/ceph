@@ -184,7 +184,7 @@ public:
    *
    * @param m The name to set.
    */
-  void set_myname(const entity_name_t m) { my_inst.name = m; }
+  void set_myname(const entity_name_t& m) { my_inst.name = m; }
   /**
    * Set the unknown address components for this Messenger.
    * This is useful if the Messenger doesn't know its full address just by
@@ -552,11 +552,10 @@ public:
 	 p++)
       if ((*p)->ms_dispatch(m))
 	return;
-    std::ostringstream oss;
-    oss << "ms_deliver_dispatch: fatal error: unhandled message "
-	<< m << " " << *m << " from " << m->get_source_inst();
-    dout_emergency(oss.str());
-    assert(0);
+    lsubdout(cct, ms, 0) << "ms_deliver_dispatch: unhandled message " << m << " " << *m << " from "
+			 << m->get_source_inst() << dendl;
+    assert(!cct->_conf->ms_die_on_unhandled_msg);
+    m->put();
   }
   /**
    * Notify each Dispatcher of a new Connection. Call

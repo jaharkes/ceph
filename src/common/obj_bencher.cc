@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <sstream>
+#include <vector>
 
 
 const std::string BENCH_LASTRUN_METADATA = "benchmark_last_metadata";
@@ -305,11 +306,11 @@ int ObjBencher::write_bench(int secondsToRun, int concurrentios) {
   std::string prefix = generate_object_prefix();
   out(cout) << "Object prefix: " << prefix << std::endl;
 
-  std::string name[concurrentios];
+  std::vector<string> name(concurrentios);
   std::string newName;
   bufferlist* contents[concurrentios];
   double total_latency = 0;
-  utime_t start_times[concurrentios];
+  std::vector<utime_t> start_times(concurrentios);
   utime_t stopTime;
   int r = 0;
   bufferlist b_write;
@@ -493,13 +494,13 @@ int ObjBencher::write_bench(int secondsToRun, int concurrentios) {
 
 int ObjBencher::seq_read_bench(int seconds_to_run, int num_objects, int concurrentios, int pid) {
   lock_cond lc(&lock);
-  std::string name[concurrentios];
+  std::vector<string> name(concurrentios);
   std::string newName;
   bufferlist* contents[concurrentios];
   int index[concurrentios];
   int errors = 0;
   utime_t start_time;
-  utime_t start_times[concurrentios];
+  std::vector<utime_t> start_times(concurrentios);
   utime_t time_to_run;
   time_to_run.set_from_double(seconds_to_run);
   double total_latency = 0;
@@ -705,7 +706,7 @@ int ObjBencher::clean_up(const std::string& prefix, int concurrentios) {
 
 int ObjBencher::clean_up(int num_objects, int prevPid, int concurrentios) {
   lock_cond lc(&lock);
-  std::string name[concurrentios];
+  std::vector<string> name(concurrentios);
   std::string newName;
   int r = 0;
   utime_t runtime;
@@ -845,7 +846,7 @@ bool ObjBencher::more_objects_matching_prefix(const std::string& prefix, std::li
 
   objects->clear();
 
-  while (objects->size() == 0) {
+  while (objects->empty()) {
     bool objects_remain = get_objects(&unfiltered_objects, 20);
     if (!objects_remain)
       return false;
@@ -865,7 +866,7 @@ bool ObjBencher::more_objects_matching_prefix(const std::string& prefix, std::li
 
 int ObjBencher::clean_up_slow(const std::string& prefix, int concurrentios) {
   lock_cond lc(&lock);
-  std::string name[concurrentios];
+  std::vector<string> name(concurrentios);
   std::string newName;
   int r = 0;
   utime_t runtime;
@@ -888,7 +889,7 @@ int ObjBencher::clean_up_slow(const std::string& prefix, int concurrentios) {
 
   //set up initial removes
   for (int i = 0; i < concurrentios; ++i) {
-    if (objects.size() == 0) {
+    if (objects.empty()) {
       // if there are fewer objects than concurrent ios, don't generate extras
       bool objects_found = more_objects_matching_prefix(prefix, &objects);
       if (!objects_found) {
@@ -940,7 +941,7 @@ int ObjBencher::clean_up_slow(const std::string& prefix, int concurrentios) {
     lock.Unlock();
 
     // get more objects if necessary
-    if (objects.size() == 0) {
+    if (objects.empty()) {
       objects_remain = more_objects_matching_prefix(prefix, &objects);
       // quit if there are no more
       if (!objects_remain) {

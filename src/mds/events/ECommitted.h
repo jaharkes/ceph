@@ -26,23 +26,14 @@ public:
   ECommitted(metareqid_t r) : 
     LogEvent(EVENT_COMMITTED), reqid(r) { }
 
-  void print(ostream& out) {
+  void print(ostream& out) const {
     out << "ECommitted " << reqid;
   }
 
-  void encode(bufferlist &bl) const {
-    __u8 struct_v = 2;
-    ::encode(struct_v, bl);
-    ::encode(stamp, bl);
-    ::encode(reqid, bl);
-  } 
-  void decode(bufferlist::iterator &bl) {
-    __u8 struct_v;
-    ::decode(struct_v, bl);
-    if (struct_v >= 2)
-      ::decode(stamp, bl);
-    ::decode(reqid, bl);
-  }
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::iterator &bl);
+  void dump(Formatter *f) const;
+  static void generate_test_instances(list<ECommitted*>& ls);
 
   void update_segment() {}
   void replay(MDS *mds);

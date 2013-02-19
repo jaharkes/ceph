@@ -70,11 +70,11 @@ int main(int argc, char **argv) {
 
   finisher = new Finisher(g_ceph_context);
   
-  if (args.size()) {
+  if (!args.empty()) {
     strcpy(path, args[0]);
   } else {
     srand(getpid()+time(0));
-    snprintf(path, sizeof(path), "/tmp/test_filejournal.tmp.%d", rand());
+    snprintf(path, sizeof(path), "/tmp/ceph_test_filejournal.tmp.%d", rand());
   }
   cout << "path " << path << std::endl;
 

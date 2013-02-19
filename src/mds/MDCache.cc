@@ -51,7 +51,6 @@
 #include "events/ESubtreeMap.h"
 #include "events/EUpdate.h"
 #include "events/ESlaveUpdate.h"
-#include "events/EString.h"
 #include "events/EImportFinish.h"
 #include "events/EFragment.h"
 #include "events/ECommitted.h"
@@ -312,7 +311,7 @@ CInode *MDCache::create_system_inode(inodeno_t ino, int mode)
 CInode *MDCache::create_root_inode()
 {
   CInode *i = create_system_inode(MDS_INO_ROOT, S_IFDIR|0755);
-  i->default_layout = new struct default_file_layout;
+  i->default_layout = new struct file_layout_policy_t;
   i->default_layout->layout = default_file_layout;
   i->default_layout->layout.fl_pg_pool = mds->mdsmap->get_first_data_pool();
   return i;
@@ -4942,7 +4941,7 @@ void MDCache::rejoin_import_cap(CInode *in, client_t client, ceph_mds_cap_reconn
 
 void MDCache::try_reconnect_cap(CInode *in, Session *session)
 {
-  client_t client = session->get_client();
+  client_t client = session->info.get_client();
   ceph_mds_cap_reconnect *rc = get_replay_cap_reconnect(in->ino(), client);
   if (rc) {
     in->reconnect_cap(client, *rc, session);
@@ -4968,10 +4967,10 @@ void MDCache::try_reconnect_cap(CInode *in, Session *session)
 
 void MDCache::do_cap_import(Session *session, CInode *in, Capability *cap)
 {
-  client_t client = session->inst.name.num();
+  client_t client = session->info.inst.name.num();
   SnapRealm *realm = in->find_snaprealm();
   if (realm->have_past_parents_open()) {
-    dout(10) << "do_cap_import " << session->inst.name << " mseq " << cap->get_mseq() << " on " << *in << dendl;
+    dout(10) << "do_cap_import " << session->info.inst.name << " mseq " << cap->get_mseq() << " on " << *in << dendl;
     cap->set_last_issue();
     MClientCaps *reap = new MClientCaps(CEPH_CAP_OP_IMPORT,
 					in->ino(),
@@ -4983,7 +4982,7 @@ void MDCache::do_cap_import(Session *session, CInode *in, Capability *cap)
     realm->build_snap_trace(reap->snapbl);
     mds->send_message_client_counted(reap, session);
   } else {
-    dout(10) << "do_cap_import missing past snap parents, delaying " << session->inst.name << " mseq "
+    dout(10) << "do_cap_import missing past snap parents, delaying " << session->info.inst.name << " mseq "
 	     << cap->get_mseq() << " on " << *in << dendl;
     in->auth_pin(this);
     cap->inc_suppress();
@@ -5301,7 +5300,7 @@ void MDCache::queue_file_recover(CInode *in)
     predirty_journal_parents(mut, &le->metablob, in, 0, PREDIRTY_PRIMARY);
 
     s.erase(*s.begin());
-    while (s.size()) {
+    while (!s.empty()) {
       snapid_t snapid = *s.begin();
       CInode *cow_inode = 0;
       journal_cow_inode(mut, &le->metablob, in, snapid-1, &cow_inode);
@@ -7998,7 +7997,7 @@ void MDCache::anchor_create(MDRequest *mdr, CInode *in, Context *onfinish)
   // make trace
   vector<Anchor> trace;
   in->make_anchor_trace(trace);
-  if (!trace.size()) {
+  if (trace.empty()) {
     assert(MDS_INO_IS_BASE(in->ino()));
     trace.push_back(Anchor(in->ino(), in->ino(), 0, 0, 0));
   }
@@ -10582,6 +10581,7 @@ C_MDS_RetryRequest::C_MDS_RetryRequest(MDCache *c, MDRequest *r)
 
 void C_MDS_RetryRequest::finish(int r)
 {
+  mdr->retry++;
   cache->dispatch_request(mdr);
   mdr->put();
 }

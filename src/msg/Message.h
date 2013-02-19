@@ -189,7 +189,7 @@ public:
   }
 
   Connection *get() {
-    return (Connection *)RefCountedObject::get();
+    return static_cast<Connection *>(RefCountedObject::get());
   }
 
   void set_priv(RefCountedObject *o) {
@@ -330,7 +330,7 @@ public:
   }
 
   Message *get() {
-    return (Message *)RefCountedObject::get();
+    return static_cast<Message *>(RefCountedObject::get());
   }
 
 protected:

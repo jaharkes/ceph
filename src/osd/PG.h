@@ -42,8 +42,6 @@
 #include "messages/MOSDRepScrub.h"
 #include "messages/MOSDPGLog.h"
 
-#include "common/DecayCounter.h"
-
 #include <list>
 #include <memory>
 #include <string>
@@ -269,7 +267,7 @@ public:
       caller_ops[e.reqid] = &(log.back());
     }
 
-    void trim(ObjectStore::Transaction &t, eversion_t s);
+    void trim(ObjectStore::Transaction &t, hobject_t& oid, eversion_t s);
 
     ostream& print(ostream& out) const;
   };
@@ -336,6 +334,16 @@ public:
       f->dump_unsigned("head", head);
       f->dump_unsigned("tail", tail);
       f->dump_unsigned("zero_to", zero_to);
+      f->open_array_section("divergent_priors");
+      for (map<eversion_t, hobject_t>::const_iterator p = divergent_priors.begin();
+	   p != divergent_priors.end();
+	   ++p) {
+	f->open_object_section("prior");
+	f->dump_stream("version") << p->first;
+	f->dump_stream("object") << p->second;
+	f->close_section();
+      }
+      f->close_section();
     }
     static void generate_test_instances(list<OndiskLog*>& o) {
       o.push_back(new OndiskLog);
@@ -379,6 +387,7 @@ public:
   void unlock() {
     //generic_dout(0) << this << " " << info.pgid << " unlock" << dendl;
     assert(!dirty_info);
+    assert(!dirty_big_info);
     assert(!dirty_log);
     _lock.Unlock();
   }
@@ -417,13 +426,23 @@ public:
   }
 
 
-  bool dirty_info, dirty_log;
+  bool dirty_info, dirty_big_info, dirty_log;
 
 public:
   // pg state
   pg_info_t        info;
+  __u8 info_struct_v;
   const coll_t coll;
   IndexedLog  log;
+  static string get_info_key(pg_t pgid) {
+    return stringify(pgid) + "_info";
+  }
+  static string get_biginfo_key(pg_t pgid) {
+    return stringify(pgid) + "_biginfo";
+  }
+  static string get_epoch_key(pg_t pgid) {
+    return stringify(pgid) + "_epoch";
+  }
   hobject_t    log_oid;
   hobject_t    biginfo_oid;
   OndiskLog   ondisklog;
@@ -596,7 +615,7 @@ protected:
 
     /// Adjusts begin to the first object
     void trim() {
-      if (objects.size())
+      if (!objects.empty())
 	begin = objects.begin()->first;
       else
 	begin = end;
@@ -1002,6 +1021,8 @@ public:
     ino_t hino, const hobject_t &hoid,
     const map<string, bufferptr> &attrs,
     set<snapid_t> *snapcolls) {};
+  void check_ondisk_snap_colls(
+    const interval_set<snapid_t> &ondisk_snapcolls);
   void clear_scrub_reserved();
   void scrub_reserve_replicas();
   void scrub_unreserve_replicas();
@@ -1766,29 +1787,37 @@ public:
   // pg on-disk state
   void do_pending_flush();
 
+private:
   void write_info(ObjectStore::Transaction& t);
   void write_log(ObjectStore::Transaction& t);
+public:
 
   void write_if_dirty(ObjectStore::Transaction& t);
 
   void add_log_entry(pg_log_entry_t& e, bufferlist& log_bl);
-  void append_log(vector<pg_log_entry_t>& logv, eversion_t trim_to, ObjectStore::Transaction &t);
+  void append_log(
+    vector<pg_log_entry_t>& logv, eversion_t trim_to, ObjectStore::Transaction &t);
 
-  static void read_log(ObjectStore *store, coll_t coll, hobject_t log_oid,
+  /// return true if the log should be rewritten
+  static bool read_log(ObjectStore *store, coll_t coll, hobject_t log_oid,
+    const pg_info_t &info, OndiskLog &ondisklog, IndexedLog &log,
+    pg_missing_t &missing, ostringstream &oss, const PG *passedpg = NULL);
+  static void read_log_old(ObjectStore *store, coll_t coll, hobject_t log_oid,
     const pg_info_t &info, OndiskLog &ondisklog, IndexedLog &log,
     pg_missing_t &missing, ostringstream &oss, const PG *passedpg = NULL);
   bool check_log_for_corruption(ObjectStore *store);
   void trim(ObjectStore::Transaction& t, eversion_t v);
-  void trim_ondisklog(ObjectStore::Transaction& t);
   void trim_peers();
 
   std::string get_corrupt_pg_log_name() const;
-  static int read_info(ObjectStore *store, const coll_t coll,
+  static int read_info(
+    ObjectStore *store, const coll_t coll,
     bufferlist &bl, pg_info_t &info, map<epoch_t,pg_interval_t> &past_intervals,
-    hobject_t &biginfo_oid, interval_set<snapid_t>  &snap_collections);
+    hobject_t &biginfo_oid, hobject_t &infos_oid,
+    interval_set<snapid_t>  &snap_collections, __u8 &);
   void read_state(ObjectStore *store, bufferlist &bl);
-  static epoch_t peek_map_epoch(ObjectStore *store,
-				coll_t coll, bufferlist *bl);
+  static epoch_t peek_map_epoch(ObjectStore *store, coll_t coll,
+                               hobject_t &infos_oid, bufferlist *bl);
   coll_t make_snap_collection(ObjectStore::Transaction& t, snapid_t sn);
   void update_snap_collections(vector<pg_log_entry_t> &log_entries,
 			       ObjectStore::Transaction& t);

@@ -27,7 +27,7 @@
 
 #define dout_subsys ceph_subsys_filestore
 #undef dout_prefix
-#define dout_prefix *_dout << "test_filestore_state "
+#define dout_prefix *_dout << "ceph_test_filestore_state "
 
 const coll_t TestFileStoreState::META_COLL("meta");
 const coll_t TestFileStoreState::TEMP_COLL("temp");
@@ -229,7 +229,7 @@ hobject_t *TestFileStoreState::coll_entry_t::remove_obj_at(int pos, int *key)
 hobject_t *TestFileStoreState::coll_entry_t::get_obj_at(int pos,
     bool remove, int *key)
 {
-  if (!m_objects.size()) {
+  if (m_objects.empty()) {
     dout(5) << "get_obj_at coll " << m_coll.to_str() << " pos " << pos
         << " in an empty collection" << dendl;
     return NULL;
