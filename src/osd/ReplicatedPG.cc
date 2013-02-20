@@ -2212,9 +2212,8 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
           assert(oi_iter->first.first == oi_iter->second.cookie);
           assert(oi_iter->first.second.is_client());
           count++;
-          dout(20) << "key entity_name._num=" << oi_iter->first.second.num()
-               << " watch_info cookie=" << oi_iter->second.cookie << " timeout=" << oi_iter->second.timeout_seconds
-               << dendl;
+          dout(20) << "key CLIENT " << oi_iter->first.second.num() << " "
+               << oi_iter->second << dendl;
           ::encode(oi_iter->first.second.num(), bl);
           ::encode(oi_iter->second.cookie, bl);
         }
