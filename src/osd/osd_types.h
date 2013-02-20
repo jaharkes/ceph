@@ -2020,4 +2020,64 @@ struct OSDOp {
 
 ostream& operator<<(ostream& out, const OSDOp& op);
 
+struct watch_item_t {
+  int64_t entity_num; //Always TYPE_CLIENT of entity_name_t
+  uint64_t cookie;
+  uint32_t timeout_seconds;
+
+  void encode(bufferlist &bl) const {
+    ::encode(entity_num, bl);
+    ::encode(cookie, bl);
+    ::encode(timeout_seconds, bl);
+  }
+  void decode(bufferlist::iterator &bl) {
+    ::decode(entity_num, bl);
+    ::decode(cookie, bl);
+    ::decode(timeout_seconds, bl);
+  }
+};
+WRITE_CLASS_ENCODER(watch_item_t)
+
+/**
+ * obj list watch response format
+ *
+ */
+struct obj_list_watch_response_t {
+  list<watch_item_t> entries;
+
+  void encode(bufferlist& bl) const {
+    __u8 v = 1;
+    ::encode(v, bl);
+    ::encode(entries, bl);
+  }
+  void decode(bufferlist::iterator& bl) {
+    __u8 v;
+    ::decode(v, bl);
+    assert(v == 1);
+    //::decode(entries, bl);
+  }
+#if 0
+  void dump(Formatter *f) const {
+    f->dump_stream("handle") << handle;
+    f->open_array_section("entries");
+    for (list<pair<object_t, string> >::const_iterator p = entries.begin(); p != entries.end(); ++p) {
+      f->open_object_section("object");
+      f->dump_stream("object") << p->first;
+      f->dump_string("key", p->second);
+      f->close_section();
+    }
+    f->close_section();
+  }
+  static void generate_test_instances(list<pg_ls_response_t*>& o) {
+    o.push_back(new pg_ls_response_t);
+    o.push_back(new pg_ls_response_t);
+    o.back()->handle = hobject_t(object_t("hi"), "key", 1, 2, -1);
+    o.back()->entries.push_back(make_pair(object_t("one"), string()));
+    o.back()->entries.push_back(make_pair(object_t("two"), string("twokey")));
+  }
+#endif
+};
+
+WRITE_CLASS_ENCODER(obj_list_watch_response_t)
+
 #endif
