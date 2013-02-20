@@ -2055,15 +2055,14 @@ struct obj_list_watch_response_t {
   list<watch_item_t> entries;
 
   void encode(bufferlist& bl) const {
-    __u8 v = 1;
-    ::encode(v, bl);
+    ENCODE_START(1, 1, bl);
     ::encode(entries, bl);
+    ENCODE_FINISH(bl);
   }
   void decode(bufferlist::iterator& bl) {
-    __u8 v;
-    ::decode(v, bl);
-    assert(v == 1);
-    //::decode(entries, bl);
+    DECODE_START(1, bl);
+    ::decode(entries, bl);
+    DECODE_FINISH(bl);
   }
 #if 0
   void dump(Formatter *f) const {
