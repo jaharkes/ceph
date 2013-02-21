@@ -67,6 +67,8 @@ void LogSegment::try_to_expire(MDS *mds, C_GatherBuilder &gather_bld)
 
   dout(6) << "LogSegment(" << offset << ").try_to_expire" << dendl;
 
+  assert(g_conf->mds_kill_journal_at != 1);
+
   // commit dirs
   for (elist<CDir*>::iterator p = new_dirfrags.begin(); !p.end(); ++p) {
     dout(20) << " new_dirfrag " << **p << dendl;
@@ -254,6 +256,7 @@ void LogSegment::try_to_expire(MDS *mds, C_GatherBuilder &gather_bld)
     dout(6) << "LogSegment(" << offset << ").try_to_expire waiting" << dendl;
     mds->mdlog->flush();
   } else {
+    assert(g_conf->mds_kill_journal_at != 2);
     dout(6) << "LogSegment(" << offset << ").try_to_expire success" << dendl;
   }
 }
@@ -1360,6 +1363,8 @@ void EMetaBlob::replay(MDS *mds, LogSegment *logseg, MDSlaveUpdate *slaveup)
 
   // update segment
   update_segment(logseg);
+
+  assert(g_conf->mds_kill_journal_at != 3);
 }
 
 // -----------------------

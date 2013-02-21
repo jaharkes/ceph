@@ -2628,6 +2628,7 @@ public:
     mds->server->reply_request(mdr, reply);
 
     newi->queue_backtrace(mdr->ls, newi->inode.layout.fl_pg_pool);
+    assert(g_conf->mds_kill_openc_at != 1);
   }
 };
 
@@ -5848,6 +5849,7 @@ void Server::_rename_finish(MDRequest *mdr, CDentry *srcdn, CDentry *destdn, CDe
 
   // did we import srci?  if so, explicitly ack that import that, before we unlock and reply.
 
+  assert(g_conf->mds_kill_rename_at != 7);
   // backtrace
   if (destdnl->inode->is_dir()) {
     // replace previous backtrace on this inode with myself
@@ -5870,6 +5872,7 @@ void Server::_rename_finish(MDRequest *mdr, CDentry *srcdn, CDentry *destdn, CDe
     }
     destdnl->inode->queue_backtrace(mdr->ls, destdnl->inode->inode.layout.fl_pg_pool);
   }
+  assert(g_conf->mds_kill_rename_at != 8);
 
   // reply
   MClientReply *reply = new MClientReply(mdr->client_request, 0);
