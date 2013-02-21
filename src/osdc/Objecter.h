@@ -312,6 +312,26 @@ struct ObjectOperation {
       }	
     }
   };
+  struct C_ObjectOperation_decodewatchers : public Context {
+    bufferlist bl;
+    obj_list_watch_response_t *pwatchers;
+    int *prval;
+    C_ObjectOperation_decodewatchers(obj_list_watch_response_t *pw, int *pr)
+      : pwatchers(pw), prval(pr) {}
+    void finish(int r) {
+      if (r >= 0) {
+	bufferlist::iterator p = bl.begin();
+	try {
+	  if (pwatchers)
+	    ::decode(*pwatchers, p);
+	}
+	catch (buffer::error& e) {
+	  if (prval)
+	    *prval = -EIO;
+	}
+      }	
+    }
+  };
   void getxattrs(std::map<std::string,bufferlist> *pattrs, int *prval) {
     add_op(CEPH_OSD_OP_GETXATTRS);
     if (pattrs || prval) {
@@ -492,6 +512,21 @@ struct ObjectOperation {
     ::encode(notify_id, bl);
     ::encode(cookie, bl);
     add_watch(CEPH_OSD_OP_NOTIFY_ACK, notify_id, ver, 0, bl);
+  }
+
+  void list_watchers(obj_list_watch_response_t *out,
+		     int *prval) {
+    OSDOp &op = add_op(CEPH_OSD_OP_LIST_WATCHERS);
+    op.op.extent.offset = 0; //XXX: Needed?
+    op.op.extent.length = 0; //XXX: Needed?
+    if (prval || out) {
+      unsigned p = ops.size() - 1;
+      C_ObjectOperation_decodewatchers *h =
+	new C_ObjectOperation_decodewatchers(out, prval);
+      out_handler[p] = h;
+      out_bl[p] = &h->bl;
+      out_rval[p] = prval;
+    }
   }
 
   void assert_version(uint64_t ver) {
