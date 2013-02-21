@@ -37,6 +37,10 @@ TEST(LibRadosWatchNotify, WatchNotifyTest) {
   uint64_t handle;
   ASSERT_EQ(0,
       rados_watch(ioctx, "foo", 0, &handle, watch_notify_test_cb, NULL));
+#define MAX 10
+  obj_watch_t watches[MAX];
+  ASSERT_EQ(1,
+      rados_list_watchers(ioctx, "foo", MAX, watches));
   ASSERT_EQ(0, rados_notify(ioctx, "foo", 0, NULL, 0));
   TestAlarm alarm;
   sem_wait(&sem);

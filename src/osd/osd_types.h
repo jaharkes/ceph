@@ -2030,17 +2030,21 @@ struct OSDOp {
 ostream& operator<<(ostream& out, const OSDOp& op);
 
 struct watch_item_t {
-  int64_t entity_num; //Always TYPE_CLIENT of entity_name_t
+  entity_name_t name;
   uint64_t cookie;
   uint32_t timeout_seconds;
 
+  watch_item_t() : cookie(0), timeout_seconds(0) { }
+  watch_item_t(entity_name_t name, uint64_t cookie, uint32_t timeout)
+    : name(name), cookie(cookie), timeout_seconds(timeout) { }
+
   void encode(bufferlist &bl) const {
-    ::encode(entity_num, bl);
+    ::encode(name, bl);
     ::encode(cookie, bl);
     ::encode(timeout_seconds, bl);
   }
   void decode(bufferlist::iterator &bl) {
-    ::decode(entity_num, bl);
+    ::decode(name, bl);
     ::decode(cookie, bl);
     ::decode(timeout_seconds, bl);
   }
@@ -2064,26 +2068,23 @@ struct obj_list_watch_response_t {
     ::decode(entries, bl);
     DECODE_FINISH(bl);
   }
-#if 0
   void dump(Formatter *f) const {
-    f->dump_stream("handle") << handle;
     f->open_array_section("entries");
-    for (list<pair<object_t, string> >::const_iterator p = entries.begin(); p != entries.end(); ++p) {
-      f->open_object_section("object");
-      f->dump_stream("object") << p->first;
-      f->dump_string("key", p->second);
+    for (list<watch_item_t>::const_iterator p = entries.begin(); p != entries.end(); ++p) {
+      f->open_object_section("watch");
+      f->dump_stream("watcher") << p->name;
+      f->dump_int("cookie", p->cookie);
+      f->dump_int("timeout", p->timeout_seconds);
       f->close_section();
     }
     f->close_section();
   }
-  static void generate_test_instances(list<pg_ls_response_t*>& o) {
-    o.push_back(new pg_ls_response_t);
-    o.push_back(new pg_ls_response_t);
-    o.back()->handle = hobject_t(object_t("hi"), "key", 1, 2, -1);
-    o.back()->entries.push_back(make_pair(object_t("one"), string()));
-    o.back()->entries.push_back(make_pair(object_t("two"), string("twokey")));
+  static void generate_test_instances(list<obj_list_watch_response_t*>& o) {
+    o.push_back(new obj_list_watch_response_t);
+    o.push_back(new obj_list_watch_response_t);
+    o.back()->entries.push_back(watch_item_t(entity_name_t(entity_name_t::TYPE_CLIENT, 1), 10, 30));
+    o.back()->entries.push_back(watch_item_t(entity_name_t(entity_name_t::TYPE_CLIENT, 2), 20, 60));
   }
-#endif
 };
 
 WRITE_CLASS_ENCODER(obj_list_watch_response_t)

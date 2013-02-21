@@ -82,6 +82,8 @@ namespace librados
     virtual void notify(uint8_t opcode, uint64_t ver, bufferlist& bl) = 0;
   };
 
+  typedef std::list<obj_watch_t> obj_watch_list_t;
+
   struct AioCompletion {
     AioCompletion(AioCompletionImpl *pc_) : pc(pc_) {}
     int set_complete_callback(void *cb_arg, callback_t cb);
@@ -326,6 +328,16 @@ namespace librados
 			       std::map<std::string, bufferlist> *map,
 			       int *prval);
 
+
+    /**
+     * list_watchers: watchers from object
+     *
+     * Get a list of watchers
+     *
+     * @param pbl [out] place returned values in pbl on completion
+     * @param prval [out] place error code in prval upon completion
+     */
+    void list_watchers(bufferlist *pbl, int *prval);
   };
 
 
@@ -499,12 +511,11 @@ namespace librados
     int unwatch(const std::string& o, uint64_t handle);
     int notify(const std::string& o, uint64_t ver, bufferlist& bl);
     void set_notify_timeout(uint32_t timeout);
+    int list_watchers(const std::string& oid,  obj_watch_list_t *out_vals);
 
     // assert version for next sync operations
     void set_assert_version(uint64_t ver);
     void set_assert_src_version(const std::string& o, uint64_t ver);
-
-    int listwatchers(const std::string& oid, bufferlist& bl);
 
     const std::string& get_pool_name() const;
 

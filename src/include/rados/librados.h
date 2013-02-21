@@ -153,6 +153,16 @@ struct rados_cluster_stat_t {
 };
 
 /**
+ * @struct obj_watch_t
+ * One item from list_watchers
+ */
+struct obj_watch_t {
+  int64_t num;
+  uint64_t cookie;
+  uint32_t timeout_seconds;
+}; 
+
+/**
  * Get the version of librados.
  *
  * The version number is major.minor.extra. Note that this is
@@ -1549,6 +1559,8 @@ int rados_unwatch(rados_ioctx_t io, const char *o, uint64_t handle);
  * @returns 0 on success, negative error code on failure
  */
 int rados_notify(rados_ioctx_t io, const char *o, uint64_t ver, const char *buf, int buf_len);
+
+int rados_list_watchers(rados_ioctx_t io, const char *o, uint64_t max_return, obj_watch_t ol[]);
 
 /** @} Watch/Notify */
 

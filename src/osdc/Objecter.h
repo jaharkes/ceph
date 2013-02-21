@@ -1421,7 +1421,8 @@ private:
     return op_submit(o);
   }
 
-  tid_t listwatchers(const object_t& oid, const object_locator_t& oloc,
+#if 0
+  tid_t list_watchers(const object_t& oid, const object_locator_t& oloc,
 	     snapid_t snap, bufferlist *pbl, int flags,
 	     Context *onfinish,
 	     eversion_t *objver = NULL, ObjectOperation *extra_ops = NULL) {
@@ -1436,6 +1437,7 @@ private:
     o->outbl = pbl;
     return op_submit(o);
   }
+#endif
 
   void list_objects(ListContext *p, Context *onfinish);
 

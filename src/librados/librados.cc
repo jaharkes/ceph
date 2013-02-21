@@ -686,12 +686,6 @@ int librados::IoCtx::getxattr(const std::string& oid, const char *name, bufferli
   return io_ctx_impl->getxattr(obj, name, bl);
 }
 
-int librados::IoCtx::listwatchers(const std::string& oid, bufferlist& bl)
-{
-  object_t obj(oid);
-  return io_ctx_impl->listwatchers(obj, bl);
-}
-
 int librados::IoCtx::getxattrs(const std::string& oid, map<std::string, bufferlist>& attrset)
 {
   object_t obj(oid);
@@ -749,6 +743,19 @@ int librados::IoCtx::omap_get_vals(const std::string& oid,
   ObjectReadOperation op;
   int r;
   op.omap_get_vals(start_after, max_return, out_vals, &r);
+  bufferlist bl;
+  int ret = operate(oid, &op, &bl);
+  if (ret < 0)
+    return ret;
+
+  return r;
+}
+
+int librados::IoCtx::list_watchers(const std::string& oid, obj_watch_list_t *out_vals)
+{
+  ObjectReadOperation op;
+  int r;
+  op.list_watchers(out_vals, &r);
   bufferlist bl;
   int ret = operate(oid, &op, &bl);
   if (ret < 0)
@@ -2247,4 +2254,20 @@ int rados_notify(rados_ioctx_t io, const char *o, uint64_t ver, const char *buf,
     bl.push_back(p);
   }
   return ctx->notify(oid, ver, bl);
+}
+
+extern "C" int rados_list_watchers(rados_ioctx_t io, const char *o, uint64_t max_return, obj_watch_t ol[])
+{
+  librados::IoCtxImpl *ctx = (librados::IoCtxImpl *)io;
+  object_t oid(o);
+  obj_watch_list_t wl;
+  int r = ctx->list_watchers(oid, &wl);
+  if (r < 0)
+    return r;
+  int count = 0;
+  while(count < max_return) {
+    ol[count] = wl.entries.pop_front();
+    count++;
+  }
+  return count;
 }

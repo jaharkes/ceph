@@ -1268,21 +1268,22 @@ int librados::IoCtxImpl::getxattr(const object_t& oid,
   return bl.length();
 }
 
-int librados::IoCtxImpl::listwatchers(const object_t& oid,
-				    bufferlist& bl)
+int librados::IoCtxImpl::list_watchers(const object_t& oid,
+				    obj_watch_list_t *out_vals)
 {
-  Mutex mylock("IoCtxImpl::listwatchers::mylock");
+  Mutex mylock("IoCtxImpl::list_watchers::mylock");
   Cond cond;
   bool done;
   int r;
   Context *onack = new C_SafeCond(&mylock, &cond, &done, &r);
   eversion_t ver;
+  bufferlist bl;
 
   ::ObjectOperation op;
   ::ObjectOperation *pop = prepare_assert_ops(&op);
 
   lock->Lock();
-  objecter->listwatchers(oid, oloc,
+  objecter->list_watchers(oid, oloc,
 		     snap_seq, &bl, 0,
 		     onack, &ver, pop);
   lock->Unlock();
@@ -1291,14 +1292,27 @@ int librados::IoCtxImpl::listwatchers(const object_t& oid,
   while (!done)
     cond.Wait(mylock);
   mylock.Unlock();
-  ldout(client->cct, 10) << "Objecter returned from listwatchers" << dendl;
+  ldout(client->cct, 10) << "Objecter returned from list_watchers" << dendl;
 
   set_sync_op_version(ver);
 
   if (r < 0)
     return r;
 
-  return bl.length();
+  obj_list_watch_response_t wl;
+  bufferlist::iterator p = bl.begin();
+  wl.decode(p);
+  r = 0;
+  while((list<watch_item_t>::iterator i = wl.entries.pop_front()) != wl.entries.end()) {
+    obj_watch_t ow;
+    ow.num = i->name.num();
+    ow.cookie = i->cookie;
+    ow.timeout_seconds = i->timeout_seconds;
+    out_vals->push_back(ow);
+    r++;
+  }
+
+  return r;
 }
 
 int librados::IoCtxImpl::rmxattr(const object_t& oid, const char *name)

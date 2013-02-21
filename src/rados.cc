@@ -2007,9 +2007,10 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
       usage_exit();
 
     string oid(nargs[1]);
+    obj_list_watch_response_t lw;
 
     bufferlist bl;
-    ret = io_ctx.listwatchers(oid, bl);
+    ret = io_ctx.list_watchers(oid, &lw);
     if (ret < 0) {
       cerr << "error listing watchers " << pool_name << "/" << oid << ": " << strerror_r(-ret, buf, sizeof(buf)) << std::endl;
       return 1;
@@ -2017,18 +2018,12 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
     else
       ret = 0;
     
-    int count;
     bufferlist::iterator p = bl.begin();
-    bufferlist info;
-    ::decode(count, p);
-    ::decode(info, p);
-    p = info.begin();
-    for (int i = 0 ; i < count ; i++) {
-      uint64_t cookie;
-      uint64_t num;
-      ::decode(num, p);
-      ::decode(cookie, p);
-      cout << "num=" << num << " cookie=" << cookie << std::endl;
+    lw.decode(p);
+
+    watch_item_t::iterator i;
+    while((i = lw.entries.pop_front()) != lw.entries.end()) {
+      cout "watcher=client." << i->name.num() << " cookie=" << i->cookie;
     }
   } else {
     cerr << "unrecognized command " << nargs[0] << std::endl;
